@@ -37,10 +37,20 @@
       <div class="overlay-card">
         <h2>Welcome to the Jungle!</h2>
         <p>Guide your snake to the fruit. Every 3 bites, answer a
-           multiplication question. Get it right and a jungle hero
-           smashes your snake shorter. Get it wrong and a wizard
-           makes it a little longer &mdash; no points lost, ever!</p>
+           question &mdash; mostly multiplication, with a few easy word
+           questions mixed in. Get it right and a jungle hero smashes
+           your snake shorter. Get it wrong and a wizard makes it a
+           little longer &mdash; no points lost, ever!</p>
         <p class="controls-hint">Move with the <strong>arrow keys</strong> or <strong>W A S D</strong>.</p>
+
+        <p class="difficulty-label">Choose your difficulty:</p>
+        <div id="difficulty-row" role="group" aria-label="Choose your difficulty">
+          <button class="difficulty-button" data-difficulty="easy" type="button">Easy</button>
+          <button class="difficulty-button selected" data-difficulty="medium" type="button">Medium</button>
+          <button class="difficulty-button" data-difficulty="hard" type="button">Hard</button>
+          <button class="difficulty-button" data-difficulty="impossible" type="button">Impossible</button>
+        </div>
+
         <button id="start-button" class="primary-button">Start Game</button>
       </div>
     </div>
@@ -48,7 +58,7 @@
     <!-- Quiz overlay -->
     <div id="quiz-overlay" class="overlay hidden">
       <div class="overlay-card quiz-card">
-        <p class="quiz-kicker">Quick Question!</p>
+        <p class="quiz-kicker" id="quiz-kicker">Quick Question!</p>
         <h2 id="quiz-question">6 &times; 7 = ?</h2>
         <div id="quiz-choices"></div>
         <button id="quiz-swap-button" class="secondary-button">🔄 Swap this question</button>

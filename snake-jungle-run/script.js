@@ -18,6 +18,14 @@
   const MIN_TICK_MS = 90;         // fastest the game is allowed to get
   const SPEEDUP_PER_BITE = 1.5;   // ms shaved off per bite eaten
   const HIGH_SCORE_KEY = 'snakeJungleRun.highScore';
+  const ELA_QUESTION_CHANCE = 0.25; // about 1 in 4 questions is an easy word question instead of math
+
+  const DIFFICULTY_RANGES = {
+    easy: { min: 1, max: 5 },
+    medium: { min: 2, max: 9 },
+    hard: { min: 6, max: 12 },
+    impossible: { min: 12, max: 20 },
+  };
 
   // ---------- DOM references ----------
   const canvas = document.getElementById('board');
@@ -34,9 +42,11 @@
   const startButton = document.getElementById('start-button');
 
   const quizOverlay = document.getElementById('quiz-overlay');
+  const quizKickerEl = document.getElementById('quiz-kicker');
   const quizQuestionEl = document.getElementById('quiz-question');
   const quizChoicesEl = document.getElementById('quiz-choices');
   const quizSwapButton = document.getElementById('quiz-swap-button');
+  const difficultyButtons = Array.from(document.querySelectorAll('.difficulty-button'));
 
   const gameOverOverlay = document.getElementById('gameover-overlay');
   const finalScoreEl = document.getElementById('final-score');
@@ -62,13 +72,16 @@
   let msSinceLastTick = 0;
   let lastFrameTime = 0;
   let currentQuestion = null;
+  let difficulty = 'medium';
 
   // ---------- Question generation ----------
-  // Builds a random multiplication-facts question with three plausible
-  // wrong answers, sized for 5th-grade times tables (2 through 12).
-  function generateQuestion() {
-    const a = 2 + Math.floor(Math.random() * 11); // 2..12
-    const b = 2 + Math.floor(Math.random() * 11); // 2..12
+  // Builds a random multiplication question with three plausible wrong
+  // answers. The factor range scales with the chosen difficulty.
+  function generateMathQuestion(diffKey) {
+    const range = DIFFICULTY_RANGES[diffKey] || DIFFICULTY_RANGES.medium;
+    const span = range.max - range.min + 1;
+    const a = range.min + Math.floor(Math.random() * span);
+    const b = range.min + Math.floor(Math.random() * span);
     const correct = a * b;
 
     const distractorPool = new Set([
@@ -97,7 +110,45 @@
     }
 
     const choices = shuffle([correct, ...distractors]);
-    return { text: `${a} × ${b} = ?`, correct, choices };
+    return { subject: 'math', text: `${a} × ${b} = ?`, correct, choices };
+  }
+
+  // Easy 5th-grade word questions: synonyms, antonyms, plurals, parts of
+  // speech, rhymes, and spelling. Mixed in alongside the math questions.
+  const ELA_QUESTIONS = [
+    { text: 'Which word means the same as "happy"?', correct: 'glad', choices: ['glad', 'sad', 'tired', 'angry'] },
+    { text: 'Which word means the same as "quick"?', correct: 'fast', choices: ['fast', 'slow', 'quiet', 'loud'] },
+    { text: 'Which word means the same as "small"?', correct: 'tiny', choices: ['tiny', 'giant', 'wide', 'loud'] },
+    { text: 'Which word means the same as "smart"?', correct: 'clever', choices: ['clever', 'silly', 'slow', 'weak'] },
+    { text: 'Which word is the opposite of "big"?', correct: 'small', choices: ['small', 'huge', 'tall', 'wide'] },
+    { text: 'Which word is the opposite of "begin"?', correct: 'end', choices: ['end', 'start', 'open', 'continue'] },
+    { text: 'Which word is the opposite of "up"?', correct: 'down', choices: ['down', 'high', 'top', 'over'] },
+    { text: 'Which word is the opposite of "loud"?', correct: 'quiet', choices: ['quiet', 'big', 'fast', 'happy'] },
+    { text: 'What is the plural of "mouse"?', correct: 'mice', choices: ['mice', 'mouses', 'mices', 'mouse'] },
+    { text: 'What is the plural of "child"?', correct: 'children', choices: ['children', 'childs', 'childes', 'childrens'] },
+    { text: 'What is the plural of "leaf"?', correct: 'leaves', choices: ['leaves', 'leafs', 'leafes', 'leaf'] },
+    { text: 'Which word is the noun in "The dog ran fast"?', correct: 'dog', choices: ['dog', 'ran', 'fast', 'the'] },
+    { text: 'Which word is the verb in "She sings a song"?', correct: 'sings', choices: ['sings', 'song', 'she', 'a'] },
+    { text: 'Which word is the adjective in "The bright sun rose"?', correct: 'bright', choices: ['bright', 'sun', 'rose', 'the'] },
+    { text: 'Which word rhymes with "cat"?', correct: 'hat', choices: ['hat', 'dog', 'sun', 'cup'] },
+    { text: 'Which word rhymes with "light"?', correct: 'night', choices: ['night', 'table', 'spoon', 'chair'] },
+    { text: 'Which word rhymes with "star"?', correct: 'car', choices: ['car', 'moon', 'tree', 'book'] },
+    { text: 'Which word is spelled correctly?', correct: 'friend', choices: ['friend', 'freind', 'frend', 'friende'] },
+    { text: 'Which word is spelled correctly?', correct: 'because', choices: ['because', 'becuase', 'becouse', 'beacause'] },
+    { text: 'Which word is spelled correctly?', correct: 'definitely', choices: ['definitely', 'definately', 'definitly', 'defenitely'] },
+  ];
+  let elaQueue = [];
+
+  function generateElaQuestion() {
+    if (elaQueue.length === 0) {
+      elaQueue = shuffle(ELA_QUESTIONS.map((_, i) => i));
+    }
+    const q = ELA_QUESTIONS[elaQueue.pop()];
+    return { subject: 'ela', text: q.text, correct: q.correct, choices: shuffle(q.choices) };
+  }
+
+  function generateQuestion() {
+    return Math.random() < ELA_QUESTION_CHANCE ? generateElaQuestion() : generateMathQuestion(difficulty);
   }
 
   function shuffle(arr) {
@@ -197,6 +248,13 @@
     renderQuiz();
   });
 
+  difficultyButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      difficulty = btn.dataset.difficulty;
+      difficultyButtons.forEach((b) => b.classList.toggle('selected', b === btn));
+    });
+  });
+
   // ---------- State machine ----------
   function setState(next) {
     state = next;
@@ -280,6 +338,7 @@
   }
 
   function renderQuiz() {
+    quizKickerEl.textContent = currentQuestion.subject === 'ela' ? 'Word Challenge!' : 'Math Challenge!';
     quizQuestionEl.textContent = currentQuestion.text;
     quizChoicesEl.innerHTML = '';
     currentQuestion.choices.forEach((choiceValue) => {
@@ -306,7 +365,7 @@
     } else {
       chosenButton.classList.add('wrong');
       buttons.forEach((b) => {
-        if (Number(b.textContent) === currentQuestion.correct) b.classList.add('correct');
+        if (b.textContent === String(currentQuestion.correct)) b.classList.add('correct');
       });
       streak = 0;
       growSnake(WRONG_ANSWER_GROWTH);
