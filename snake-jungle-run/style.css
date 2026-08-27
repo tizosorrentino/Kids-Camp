@@ -336,3 +336,9 @@ body {
 .hidden {
   display: none !important;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-burst {
+    animation-duration: 1ms;
+  }
+}
