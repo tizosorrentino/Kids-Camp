@@ -18,6 +18,7 @@
       <div class="stat"><span class="stat-label">Best</span><span id="high-score-value">0</span></div>
       <div class="stat"><span class="stat-label">Streak</span><span id="streak-value">0</span></div>
       <div class="stat"><span class="stat-label">Multiplier</span><span id="multiplier-value">x1</span></div>
+      <div class="stat"><span class="stat-label">Balls</span><span id="balls-value">0</span></div>
     </div>
     <div id="quiz-progress" aria-label="Bites until next question">
       <span class="progress-dot" data-index="0"></span>
@@ -51,7 +52,21 @@
           <button class="difficulty-button" data-difficulty="impossible" type="button">Impossible</button>
         </div>
 
-        <button id="start-button" class="primary-button">Start Game</button>
+        <div class="button-row">
+          <button id="start-button" class="primary-button">Start Game</button>
+          <button id="store-button" class="secondary-button">🛍️ Skin Store</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skin store -->
+    <div id="store-overlay" class="overlay hidden">
+      <div class="overlay-card store-card">
+        <h2>🛍️ Skin Store</h2>
+        <p class="store-balance">You have <strong id="store-balance">0</strong> 🔵 balls</p>
+        <p class="store-hint">Earn balls by eating fruit in the game. Spend them here on new snake colors.</p>
+        <div id="skin-grid"></div>
+        <button id="store-close-button" class="secondary-button">Back</button>
       </div>
     </div>
 
@@ -71,7 +86,7 @@
         <h2>Game Over!</h2>
         <p id="gameover-summary">You scored <strong><span id="final-score">0</span></strong> points.</p>
         <p id="gameover-new-best" class="hidden">🏆 New best score!</p>
-        <div class="gameover-buttons">
+        <div class="button-row">
           <button id="restart-button" class="primary-button">Play Again</button>
           <button id="lobby-button" class="secondary-button">Back to Lobby</button>
         </div>

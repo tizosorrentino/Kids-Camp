@@ -18,6 +18,9 @@
   const MIN_TICK_MS = 90;         // fastest the game is allowed to get
   const SPEEDUP_PER_BITE = 1.5;   // ms shaved off per bite eaten
   const HIGH_SCORE_KEY = 'snakeJungleRun.highScore';
+  const BALLS_KEY = 'snakeJungleRun.balls';
+  const OWNED_SKINS_KEY = 'snakeJungleRun.ownedSkins';
+  const SELECTED_SKIN_KEY = 'snakeJungleRun.selectedSkin';
   const ELA_QUESTION_CHANCE = 0.25; // about 1 in 4 questions is an easy word question instead of math
 
   const DIFFICULTY_RANGES = {
@@ -27,6 +30,15 @@
     impossible: { min: 12, max: 20 },
   };
 
+  // Snake color skins, bought in the lobby store with balls (fruit eaten).
+  // The starter yellow skin is free and always owned.
+  const SKINS = [
+    { id: 'yellow', name: 'Jungle Yellow', price: 0, body: '#ffd23f', head: '#fff3c4' },
+    { id: 'red', name: 'Ruby Red', price: 25, body: '#e8483f', head: '#ffbcb8' },
+    { id: 'blue', name: 'Ocean Blue', price: 40, body: '#3f8fe8', head: '#bfe0ff' },
+    { id: 'green', name: 'Jungle Green', price: 60, body: '#3fbf5f', head: '#c2f2cc' },
+  ];
+
   // ---------- DOM references ----------
   const canvas = document.getElementById('board');
   const ctx = canvas.getContext('2d');
@@ -34,12 +46,19 @@
   const highScoreValueEl = document.getElementById('high-score-value');
   const streakValueEl = document.getElementById('streak-value');
   const multiplierValueEl = document.getElementById('multiplier-value');
+  const ballsValueEl = document.getElementById('balls-value');
   const progressDots = Array.from(document.querySelectorAll('.progress-dot'));
   const progressLabel = document.getElementById('quiz-progress-label');
   const fxLayer = document.getElementById('fx-layer');
 
   const startOverlay = document.getElementById('start-overlay');
   const startButton = document.getElementById('start-button');
+  const storeButton = document.getElementById('store-button');
+
+  const storeOverlay = document.getElementById('store-overlay');
+  const storeBalanceEl = document.getElementById('store-balance');
+  const skinGridEl = document.getElementById('skin-grid');
+  const storeCloseButton = document.getElementById('store-close-button');
 
   const quizOverlay = document.getElementById('quiz-overlay');
   const quizKickerEl = document.getElementById('quiz-kicker');
@@ -55,7 +74,7 @@
   const lobbyButton = document.getElementById('lobby-button');
 
   // ---------- Game state ----------
-  const STATES = { START: 'START', PLAYING: 'PLAYING', QUIZ: 'QUIZ', GAME_OVER: 'GAME_OVER' };
+  const STATES = { START: 'START', PLAYING: 'PLAYING', QUIZ: 'QUIZ', GAME_OVER: 'GAME_OVER', STORE: 'STORE' };
 
   let state = STATES.START;
   let snake = [];
@@ -74,6 +93,21 @@
   let lastFrameTime = 0;
   let currentQuestion = null;
   let difficulty = 'medium';
+
+  // Balls are a permanent currency (1 per fruit eaten, saved across games)
+  // spent in the lobby store on snake color skins.
+  let totalBalls = Number(localStorage.getItem(BALLS_KEY)) || 0;
+
+  let ownedSkins = ['yellow'];
+  try {
+    const storedSkins = JSON.parse(localStorage.getItem(OWNED_SKINS_KEY));
+    if (Array.isArray(storedSkins) && storedSkins.length) ownedSkins = storedSkins;
+  } catch (e) {
+    // Ignore corrupted storage and fall back to the default.
+  }
+
+  let selectedSkinId = localStorage.getItem(SELECTED_SKIN_KEY) || 'yellow';
+  if (!SKINS.some((s) => s.id === selectedSkinId)) selectedSkinId = 'yellow';
 
   // ---------- Question generation ----------
   // Builds a random multiplication question with three plausible wrong
@@ -201,6 +235,7 @@
     highScoreValueEl.textContent = highScore;
     streakValueEl.textContent = streak;
     multiplierValueEl.textContent = `x${currentMultiplier()}`;
+    ballsValueEl.textContent = totalBalls;
 
     const bitesIntoCycle = cubesEaten % QUIZ_EVERY_N_BITES;
     progressDots.forEach((dot, i) => dot.classList.toggle('filled', i < bitesIntoCycle));
@@ -260,12 +295,85 @@
     });
   });
 
+  storeButton.addEventListener('click', () => {
+    renderStore();
+    setState(STATES.STORE);
+  });
+
+  storeCloseButton.addEventListener('click', () => {
+    setState(STATES.START);
+  });
+
+  // ---------- Skin store ----------
+  function renderStore() {
+    storeBalanceEl.textContent = totalBalls;
+    skinGridEl.innerHTML = '';
+
+    SKINS.forEach((skin) => {
+      const owned = ownedSkins.includes(skin.id);
+      const equipped = selectedSkinId === skin.id;
+
+      const card = document.createElement('div');
+      card.className = 'skin-card';
+
+      const swatch = document.createElement('div');
+      swatch.className = 'skin-swatch';
+      swatch.style.background = skin.body;
+
+      const name = document.createElement('div');
+      name.className = 'skin-name';
+      name.textContent = skin.name;
+
+      const priceLine = document.createElement('div');
+      priceLine.className = 'skin-price';
+      priceLine.textContent = owned ? (equipped ? 'Equipped' : 'Owned') : `${skin.price} 🔵`;
+
+      const actionBtn = document.createElement('button');
+      actionBtn.type = 'button';
+      actionBtn.className = 'skin-action-button';
+
+      if (equipped) {
+        actionBtn.textContent = 'Equipped';
+        actionBtn.classList.add('equipped');
+        actionBtn.disabled = true;
+      } else if (owned) {
+        actionBtn.textContent = 'Equip';
+        actionBtn.addEventListener('click', () => {
+          selectedSkinId = skin.id;
+          localStorage.setItem(SELECTED_SKIN_KEY, selectedSkinId);
+          renderStore();
+        });
+      } else {
+        actionBtn.textContent = 'Buy';
+        actionBtn.disabled = totalBalls < skin.price;
+        actionBtn.addEventListener('click', () => {
+          if (totalBalls < skin.price) return;
+          totalBalls -= skin.price;
+          ownedSkins.push(skin.id);
+          selectedSkinId = skin.id;
+          localStorage.setItem(BALLS_KEY, String(totalBalls));
+          localStorage.setItem(OWNED_SKINS_KEY, JSON.stringify(ownedSkins));
+          localStorage.setItem(SELECTED_SKIN_KEY, selectedSkinId);
+          renderStore();
+          updateHud();
+        });
+      }
+
+      card.appendChild(swatch);
+      card.appendChild(name);
+      card.appendChild(priceLine);
+      card.appendChild(actionBtn);
+      skinGridEl.appendChild(card);
+    });
+  }
+
   // ---------- State machine ----------
   function setState(next) {
     state = next;
     startOverlay.classList.toggle('hidden', state !== STATES.START);
     quizOverlay.classList.toggle('hidden', state !== STATES.QUIZ);
     gameOverOverlay.classList.toggle('hidden', state !== STATES.GAME_OVER);
+    storeOverlay.classList.toggle('hidden', state !== STATES.STORE);
   }
 
   // ---------- Game loop (fixed-step, frame-rate independent) ----------
@@ -310,6 +418,8 @@
     if (ateFood) {
       cubesEaten += 1;
       score += BASE_POINTS_PER_BITE * currentMultiplier();
+      totalBalls += 1;
+      localStorage.setItem(BALLS_KEY, String(totalBalls));
       tickMs = Math.max(MIN_TICK_MS, tickMs - SPEEDUP_PER_BITE);
       placeFood();
       updateHud();
@@ -440,11 +550,12 @@
   }
 
   function drawSnake() {
+    const skin = SKINS.find((s) => s.id === selectedSkinId) || SKINS[0];
     snake.forEach((seg, i) => {
       const x = seg.x * CELL_PX;
       const y = seg.y * CELL_PX;
       const pad = 2;
-      ctx.fillStyle = i === 0 ? '#fff3c4' : '#ffd23f';
+      ctx.fillStyle = i === 0 ? skin.head : skin.body;
       roundRect(ctx, x + pad, y + pad, CELL_PX - pad * 2, CELL_PX - pad * 2, 5);
       ctx.fill();
       ctx.strokeStyle = '#6e1423';
