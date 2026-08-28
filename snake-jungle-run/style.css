@@ -237,6 +237,19 @@ body {
   transform: translateY(2px);
 }
 
+.gameover-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.gameover-buttons .primary-button,
+.gameover-buttons .secondary-button {
+  margin-top: 0;
+}
+
 /* ---------- Quiz ---------- */
 
 .quiz-kicker {

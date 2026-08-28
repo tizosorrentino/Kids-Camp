@@ -52,6 +52,7 @@
   const finalScoreEl = document.getElementById('final-score');
   const newBestEl = document.getElementById('gameover-new-best');
   const restartButton = document.getElementById('restart-button');
+  const lobbyButton = document.getElementById('lobby-button');
 
   // ---------- Game state ----------
   const STATES = { START: 'START', PLAYING: 'PLAYING', QUIZ: 'QUIZ', GAME_OVER: 'GAME_OVER' };
@@ -241,6 +242,10 @@
   restartButton.addEventListener('click', () => {
     resetGame();
     setState(STATES.PLAYING);
+  });
+
+  lobbyButton.addEventListener('click', () => {
+    setState(STATES.START);
   });
 
   quizSwapButton.addEventListener('click', () => {
