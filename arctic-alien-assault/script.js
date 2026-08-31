@@ -573,6 +573,7 @@ let yaw = 0, pitch = 0;
 
 document.addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  if (e.code === 'KeyP' && !e.repeat) { togglePause(); return; }
   if (!state.running || state.paused) return;
 
   if (e.code === 'KeyE' && !e.repeat) tryOpenChest();
@@ -617,6 +618,15 @@ document.addEventListener('pointerlockerror', () => {
     state.paused = true;
   }
 });
+
+function togglePause() {
+  if (!state.running || state.gameOver || state.quizActive) return;
+  if (document.pointerLockElement === canvas) {
+    document.exitPointerLock(); // pointerlockchange shows the pause screen and sets state.paused
+  } else if (state.paused) {
+    canvas.requestPointerLock(); // pointerlockchange hides the pause screen and clears state.paused
+  }
+}
 
 /* ---------------- Shooting ---------------- */
 
