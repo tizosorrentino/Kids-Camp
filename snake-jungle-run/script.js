@@ -17,6 +17,7 @@
   const START_TICK_MS = 150;      // how often the snake moves, in milliseconds
   const MIN_TICK_MS = 90;         // fastest the game is allowed to get
   const SPEEDUP_PER_BITE = 1.5;   // ms shaved off per bite eaten
+  const POWER_COOLDOWN_MS = 20000; // skin power can only be used once every 20 seconds
   const HIGH_SCORE_KEY = 'snakeJungleRun.highScore';
   const GEMS_KEY = 'snakeJungleRun.gems';
   const OWNED_SKINS_KEY = 'snakeJungleRun.ownedSkins';
@@ -104,6 +105,7 @@
   let lastFrameTime = 0;
   let currentQuestion = null;
   let difficulty = 'medium';
+  let lastPowerUseTime = -Infinity;
 
   // Gems are a permanent currency (1 per gem collected, saved across games)
   // spent in the lobby store on snake color skins.
@@ -221,6 +223,7 @@
     streak = 0;
     tickMs = START_TICK_MS;
     msSinceLastTick = 0;
+    lastPowerUseTime = -Infinity;
     updateHud();
     placeFood();
   }
@@ -523,6 +526,16 @@
   function activateSkinPower() {
     const skin = SKINS.find((s) => s.id === selectedSkinId) || SKINS[0];
     if (!skin.power) return;
+
+    const now = performance.now();
+    const msSinceLastUse = now - lastPowerUseTime;
+    if (msSinceLastUse < POWER_COOLDOWN_MS) {
+      const secondsLeft = Math.ceil((POWER_COOLDOWN_MS - msSinceLastUse) / 1000);
+      showFx('⏳', `Power ready in ${secondsLeft}s`);
+      return;
+    }
+
+    lastPowerUseTime = now;
     shrinkSnake(skin.power);
     showFx('⚡', `${skin.name} Power! -${skin.power}`);
     updateHud();
