@@ -575,9 +575,7 @@ document.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (!state.running || state.paused) return;
 
-  if (e.code === 'KeyA') tryOpenChest();
-  if (e.code === 'KeyS') tryPickUpChest();
-  if (e.code === 'KeyK') drinkPotion();
+  if (e.code === 'Space' && !e.repeat) handleAction();
   if (e.code >= 'Digit1' && e.code <= 'Digit4') {
     const idx = Number(e.code.replace('Digit', '')) - 1;
     if (inventory.weapons[idx]) {
@@ -586,7 +584,7 @@ document.addEventListener('keydown', (e) => {
       updateHUD();
     }
   }
-  if (e.code === 'Space' && state.onGround) {
+  if (e.code === 'KeyJ' && state.onGround) {
     state.velocityY = CONFIG.jumpSpeed;
     state.onGround = false;
   }
@@ -600,11 +598,6 @@ document.addEventListener('mousemove', (e) => {
   pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2.3, Math.PI / 2.3);
   playerRig.rotation.y = yaw;
   camera.rotation.x = pitch;
-});
-
-canvas.addEventListener('mousedown', (e) => {
-  if (document.pointerLockElement !== canvas) return;
-  if (e.button === 0) shoot();
 });
 
 document.addEventListener('pointerlockchange', () => {
@@ -717,6 +710,22 @@ function drinkPotion() {
   updateHUD();
 }
 
+/* ---------------- Space bar: the one action button ---------------- */
+// Open a chest, then pick up its loot, then shoot, then (only once you're
+// out of ammo and hurt) drink a potion -- whichever applies right now.
+
+function handleAction() {
+  const chest = findNearestChest();
+  if (chest && chest.state === 'closed') { tryOpenChest(); return; }
+  if (chest && chest.state === 'open') { tryPickUpChest(); return; }
+
+  if (activeWeapon().ammo > 0) { shoot(); return; }
+  if (state.potions > 0 && state.health < 100) { drinkPotion(); return; }
+
+  SFX.empty();
+  flashToast('OUT OF AMMO');
+}
+
 /* ---------------- Damage / Death ---------------- */
 
 function damagePlayer(amount) {
@@ -792,10 +801,10 @@ function updatePrompt() {
   const chest = findNearestChest();
   if (!chest) { promptEl.classList.remove('visible'); return; }
   if (chest.state === 'closed') {
-    promptEl.textContent = 'Press [A] to open chest';
+    promptEl.textContent = 'Press [SPACE] to open chest';
   } else if (chest.state === 'open') {
     const label = chest.loot === 'potion' ? 'Healing Bottle' : chest.weaponType.name;
-    promptEl.textContent = `Press [S] to pick up ${label}`;
+    promptEl.textContent = `Press [SPACE] to pick up ${label}`;
   } else {
     promptEl.classList.remove('visible');
     return;
