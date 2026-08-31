@@ -36,6 +36,7 @@
       <div id="stats-panel">
         <div>WAVE <span id="wave-num">1</span></div>
         <div>KILLS <span id="kill-num">0</span></div>
+        <div>BRAINPOWER <span id="quiz-score">0/0</span></div>
       </div>
 
       <div id="prompt"></div>
@@ -67,6 +68,8 @@
           <div><b>S</b> Pick Up Item</div>
           <div><b>K</b> Drink Healing Potion</div>
         </div>
+        <p class="lore">Heads up, recruit: every time you die or clear a wave, you'll be
+          quizzed on math or language arts. Answer right to keep fighting!</p>
         <button id="start-btn">CLICK TO DEPLOY</button>
       </div>
     </div>
@@ -76,6 +79,18 @@
       <div class="overlay-box">
         <h2>PAUSED</h2>
         <p>Click anywhere to resume the fight.</p>
+      </div>
+    </div>
+
+    <!-- Quiz Screen -->
+    <div id="quiz-screen" class="overlay hidden">
+      <div class="overlay-box quiz-box">
+        <h2 id="quiz-title">WAVE CLEARED!</h2>
+        <p id="quiz-subtitle" class="subtitle">Answer correctly to continue</p>
+        <p id="quiz-question"></p>
+        <div id="quiz-choices"></div>
+        <p id="quiz-feedback"></p>
+        <button id="quiz-continue-btn" class="hidden">CONTINUE</button>
       </div>
     </div>
 

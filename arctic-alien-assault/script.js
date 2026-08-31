@@ -531,7 +531,10 @@ const state = {
   velocityY: 0,
   onGround: true,
   activeChest: null,
+  quizActive: false,
 };
+
+const quizStats = { correct: 0, asked: 0 };
 
 const inventory = {
   weapons: [
@@ -592,7 +595,14 @@ document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === canvas) {
     hide('pause-screen');
     state.paused = false;
-  } else if (state.running && !state.gameOver) {
+  } else if (state.running && !state.gameOver && !state.quizActive) {
+    show('pause-screen');
+    state.paused = true;
+  }
+});
+
+document.addEventListener('pointerlockerror', () => {
+  if (state.running && !state.gameOver && !state.quizActive) {
     show('pause-screen');
     state.paused = true;
   }
@@ -707,9 +717,16 @@ function killPlayer() {
   state.paused = true;
   SFX.death();
   document.exitPointerLock();
-  document.getElementById('death-stats').textContent =
-    `You survived to Wave ${state.wave} with ${state.kills} confirmed kills.`;
-  show('death-screen');
+  showQuiz({
+    title: 'YOU DIED',
+    subtitle: 'Answer correctly before you can redeploy',
+    onComplete: () => {
+      document.getElementById('death-stats').textContent =
+        `You survived to Wave ${state.wave} with ${state.kills} confirmed kills. ` +
+        `Brainpower: ${quizStats.correct}/${quizStats.asked}.`;
+      show('death-screen');
+    },
+  });
 }
 
 /* ---------------- HUD helpers ---------------- */
@@ -721,6 +738,7 @@ const ammoText = document.getElementById('ammo-text');
 const potionCount = document.getElementById('potion-count');
 const waveNum = document.getElementById('wave-num');
 const killNum = document.getElementById('kill-num');
+const quizScoreEl = document.getElementById('quiz-score');
 const promptEl = document.getElementById('prompt');
 const toastEl = document.getElementById('toast');
 const damageFlashEl = document.getElementById('damage-flash');
@@ -734,6 +752,7 @@ function updateHUD() {
   potionCount.textContent = state.potions;
   waveNum.textContent = state.wave;
   killNum.textContent = state.kills;
+  quizScoreEl.textContent = `${quizStats.correct}/${quizStats.asked}`;
 }
 
 let toastTimer = null;
@@ -769,6 +788,122 @@ function updatePrompt() {
 function show(id) { document.getElementById(id).classList.remove('hidden'); }
 function hide(id) { document.getElementById(id).classList.add('hidden'); }
 
+/* ---------------- Quiz (math + ELA checkpoints) ---------------- */
+
+const QUIZ_ELA = [
+  { q: "Which word means the same as 'happy'?", options: ['Joyful', 'Angry', 'Tired', 'Slow'], answer: 'Joyful' },
+  { q: "Which word means the opposite of 'big'?", options: ['Large', 'Huge', 'Small', 'Tall'], answer: 'Small' },
+  { q: 'Choose the correctly spelled word.', options: ['Recieve', 'Receive', 'Receeve', 'Receve'], answer: 'Receive' },
+  { q: "Which word is a noun in this sentence: 'The dog ran fast.'", options: ['dog', 'ran', 'fast', 'the'], answer: 'dog' },
+  { q: "Which word is a verb in this sentence: 'She sings a song.'", options: ['She', 'sings', 'a', 'song'], answer: 'sings' },
+  { q: "What is the plural of 'child'?", options: ['childs', 'childes', 'children', 'childrens'], answer: 'children' },
+  { q: "Which word rhymes with 'cat'?", options: ['dog', 'hat', 'cup', 'run'], answer: 'hat' },
+  { q: "Choose the correct word: 'They ___ going to the park.'", options: ['is', 'am', 'are', 'be'], answer: 'are' },
+  { q: "Which word means the opposite of 'fast'?", options: ['quick', 'slow', 'speedy', 'rapid'], answer: 'slow' },
+  { q: 'Which sentence is punctuated correctly?', options: ['I like dogs cats and birds.', 'I like dogs, cats, and birds.', 'I like, dogs cats and birds.', 'I like dogs cats, and birds'], answer: 'I like dogs, cats, and birds.' },
+  { q: "Which word means 'a place where you borrow books'?", options: ['Library', 'Labyrinth', 'Liberty', 'Literacy'], answer: 'Library' },
+  { q: "What is a synonym for 'smart'?", options: ['intelligent', 'silly', 'lazy', 'slow'], answer: 'intelligent' },
+  { q: "Which word finishes the sentence: 'I can ___ the ocean from here.'", options: ['see', 'sea', 'si', 'cee'], answer: 'see' },
+  { q: "Which word is an adjective in this sentence: 'The bright sun is shining.'", options: ['bright', 'sun', 'is', 'shining'], answer: 'bright' },
+  { q: "What is the past tense of 'run'?", options: ['runned', 'ran', 'running', 'runs'], answer: 'ran' },
+  { q: "Which word means 'very large'?", options: ['tiny', 'huge', 'small', 'little'], answer: 'huge' },
+];
+
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function generateMathQuestion() {
+  const a = randInt(2, 12);
+  const b = randInt(2, 12);
+  const correct = a * b;
+  const wrongSet = new Set();
+  while (wrongSet.size < 3) {
+    const wrong = correct + randInt(1, 10) * (Math.random() < 0.5 ? -1 : 1);
+    if (wrong > 0 && wrong !== correct) wrongSet.add(wrong);
+  }
+  const options = shuffle([correct, ...wrongSet]);
+  return { q: `${a} × ${b} = ?`, choices: options.map(String), correct: options.indexOf(correct) };
+}
+
+function pickElaQuestion() {
+  const raw = QUIZ_ELA[randInt(0, QUIZ_ELA.length - 1)];
+  const options = shuffle(raw.options);
+  return { q: raw.q, choices: options, correct: options.indexOf(raw.answer) };
+}
+
+const quizTitleEl = document.getElementById('quiz-title');
+const quizSubtitleEl = document.getElementById('quiz-subtitle');
+const quizQuestionEl = document.getElementById('quiz-question');
+const quizChoicesEl = document.getElementById('quiz-choices');
+const quizFeedbackEl = document.getElementById('quiz-feedback');
+const quizContinueBtn = document.getElementById('quiz-continue-btn');
+
+let quizCompleteCallback = null;
+
+function showQuiz({ title, subtitle, onComplete }) {
+  state.quizActive = true;
+  state.paused = true;
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+
+  quizCompleteCallback = onComplete;
+  const question = Math.random() < 0.5 ? generateMathQuestion() : pickElaQuestion();
+
+  quizTitleEl.textContent = title;
+  quizSubtitleEl.textContent = subtitle;
+  quizQuestionEl.textContent = question.q;
+  quizFeedbackEl.textContent = '';
+  quizFeedbackEl.className = '';
+  quizContinueBtn.classList.add('hidden');
+  quizChoicesEl.innerHTML = '';
+
+  question.choices.forEach((choice, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'quiz-choice';
+    btn.textContent = choice;
+    btn.addEventListener('click', () => handleQuizAnswer(i === question.correct, btn));
+    quizChoicesEl.appendChild(btn);
+  });
+
+  show('quiz-screen');
+}
+
+function handleQuizAnswer(isCorrect, btn) {
+  if (isCorrect) {
+    quizStats.correct++;
+    quizStats.asked++;
+    btn.classList.add('quiz-correct');
+    quizFeedbackEl.textContent = 'Correct! Click continue to keep fighting.';
+    quizFeedbackEl.className = 'quiz-feedback-good';
+    Array.from(quizChoicesEl.children).forEach((b) => { b.disabled = true; });
+    quizContinueBtn.classList.remove('hidden');
+    SFX.pickup();
+  } else {
+    quizStats.asked++;
+    btn.classList.add('quiz-wrong');
+    btn.disabled = true;
+    quizFeedbackEl.textContent = 'Not quite — try another answer!';
+    quizFeedbackEl.className = 'quiz-feedback-bad';
+    SFX.denied();
+  }
+  updateHUD();
+}
+
+quizContinueBtn.addEventListener('click', () => {
+  hide('quiz-screen');
+  state.quizActive = false;
+  const cb = quizCompleteCallback;
+  quizCompleteCallback = null;
+  if (cb) cb();
+});
+
 /* ---------------- Waves ---------------- */
 
 let waveSpawnTimer = 0;
@@ -784,10 +919,19 @@ function checkWaveProgress(dt) {
   if (waveSpawnTimer > 0) return;
   const remaining = aliens.filter(a => !a.dead).length;
   if (remaining === 0) {
-    state.wave++;
-    waveSpawnTimer = 2.5;
-    startWave();
-    flashToast(`WAVE ${state.wave} INCOMING`);
+    const clearedWave = state.wave;
+    const nextWave = clearedWave + 1;
+    showQuiz({
+      title: `WAVE ${clearedWave} CLEARED!`,
+      subtitle: `Answer correctly to deploy for Wave ${nextWave}`,
+      onComplete: () => {
+        state.wave = nextWave;
+        waveSpawnTimer = 2.5;
+        startWave();
+        flashToast(`WAVE ${state.wave} INCOMING`);
+        canvas.requestPointerLock();
+      },
+    });
   }
 }
 
