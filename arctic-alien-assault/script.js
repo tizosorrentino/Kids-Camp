@@ -10,7 +10,7 @@ const CONFIG = {
   totalLevels: 20,
   bossHealthPerLevel: 10,  // level N boss health = N * 10% (10%, 20%, ... 200%)
   maxAmmoPerGun: 160,
-  potionHeal: 25,          // % health restored per potion
+  potionHeal: 50,          // % health restored per potion
   interactRange: 4.5,
   alienAttackRange: 17,
   alienAttackCooldown: 1.8,
@@ -718,7 +718,7 @@ function drinkPotion() {
   state.potions--;
   state.health = Math.min(100, state.health + CONFIG.potionHeal);
   SFX.drink();
-  flashToast('+25% HEALTH');
+  flashToast(`+${CONFIG.potionHeal}% HEALTH`);
   updateHUD();
 }
 
