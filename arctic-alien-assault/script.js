@@ -577,7 +577,7 @@ document.addEventListener('keydown', (e) => {
   if (!state.running || state.paused) return;
 
   if (e.code === 'KeyE' && !e.repeat) tryOpenChest();
-  if (e.code === 'KeyA' && !e.repeat) drinkPotion();
+  if (e.code === 'KeyD' && !e.repeat) drinkPotion();
   if (e.code === 'Space' && !e.repeat) handleAction();
   if (e.code >= 'Digit1' && e.code <= 'Digit4') {
     const idx = Number(e.code.replace('Digit', '')) - 1;
