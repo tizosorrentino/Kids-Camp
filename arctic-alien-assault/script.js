@@ -180,11 +180,20 @@ function addTree(x, z) {
   );
   trunk.position.y = 0.8;
   const foliageMat = new THREE.MeshStandardMaterial({ color: 0x1c3b2e, roughness: 0.9 });
+  const snowMat = new THREE.MeshStandardMaterial({ color: 0xf4f9ff, roughness: 0.8 });
   for (let i = 0; i < 3; i++) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(1.4 - i * 0.35, 1.6, 7), foliageMat);
-    cone.position.y = 1.6 + i * 1.1;
+    const radius = 1.4 - i * 0.35;
+    const y = 1.6 + i * 1.1;
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(radius, 1.6, 7), foliageMat);
+    cone.position.y = y;
     cone.castShadow = true;
     group.add(cone);
+
+    // snow cap: a smaller white cone sharing the same apex, covering the upper slopes
+    const snowCap = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.78, 0.85, 7), snowMat);
+    snowCap.position.y = y + 0.35;
+    snowCap.castShadow = true;
+    group.add(snowCap);
   }
   trunk.castShadow = true;
   group.add(trunk);
@@ -231,6 +240,70 @@ function scatterEnvironment() {
   }
 }
 scatterEnvironment();
+
+/* ---------------- Falling Snow ---------------- */
+
+function snowflakeTexture() {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 32;
+  const ctx2d = c.getContext('2d');
+  const grad = ctx2d.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.6, 'rgba(255,255,255,0.75)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx2d.fillStyle = grad;
+  ctx2d.beginPath();
+  ctx2d.arc(16, 16, 16, 0, Math.PI * 2);
+  ctx2d.fill();
+  return new THREE.CanvasTexture(c);
+}
+
+function buildSnowfall() {
+  const count = 1000;
+  const range = CONFIG.mapHalf * 1.3;
+  const ceiling = 55;
+  const positions = new Float32Array(count * 3);
+  const fallSpeed = new Float32Array(count);
+  const swayPhase = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * range * 2;
+    positions[i * 3 + 1] = Math.random() * ceiling;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * range * 2;
+    fallSpeed[i] = 2 + Math.random() * 3;
+    swayPhase[i] = Math.random() * Math.PI * 2;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 0.22,
+    map: snowflakeTexture(),
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+    sizeAttenuation: true,
+  });
+  const points = new THREE.Points(geo, mat);
+  scene.add(points);
+  return { points, positions, fallSpeed, swayPhase, count, range, ceiling };
+}
+
+const snowfall = buildSnowfall();
+
+function updateSnowfall(dt) {
+  const pos = snowfall.positions;
+  for (let i = 0; i < snowfall.count; i++) {
+    pos[i * 3 + 1] -= snowfall.fallSpeed[i] * dt;
+    snowfall.swayPhase[i] += dt * 0.6;
+    pos[i * 3] += Math.sin(snowfall.swayPhase[i]) * 0.15 * dt;
+    if (pos[i * 3 + 1] < -2) {
+      pos[i * 3 + 1] = snowfall.ceiling;
+      pos[i * 3] = (Math.random() - 0.5) * snowfall.range * 2;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * snowfall.range * 2;
+    }
+  }
+  snowfall.points.geometry.attributes.position.needsUpdate = true;
+}
 
 /* ---------------- Shared Geometry Helpers ---------------- */
 // three.js r128 (loaded via CDN) predates CapsuleGeometry, so build capsules
@@ -1083,6 +1156,7 @@ function animate() {
   auroraStrips.forEach((m, i) => {
     m.material.opacity = 0.55 + Math.sin(performance.now() * 0.0003 + i) * 0.35;
   });
+  updateSnowfall(dt);
 
   if (state.running && !state.paused && !state.gameOver) {
     updateMovement(dt);
