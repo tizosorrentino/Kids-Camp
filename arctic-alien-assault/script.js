@@ -575,6 +575,7 @@ document.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (!state.running || state.paused) return;
 
+  if (e.code === 'KeyE' && !e.repeat) tryOpenChest();
   if (e.code === 'Space' && !e.repeat) handleAction();
   if (e.code >= 'Digit1' && e.code <= 'Digit4') {
     const idx = Number(e.code.replace('Digit', '')) - 1;
@@ -711,12 +712,11 @@ function drinkPotion() {
 }
 
 /* ---------------- Space bar: the one action button ---------------- */
-// Open a chest, then pick up its loot, then shoot, then (only once you're
-// out of ammo and hurt) drink a potion -- whichever applies right now.
+// E opens a chest. Space grabs its loot, then shoots, then (only once
+// you're out of ammo and hurt) drinks a potion -- whichever applies now.
 
 function handleAction() {
   const chest = findNearestChest();
-  if (chest && chest.state === 'closed') { tryOpenChest(); return; }
   if (chest && chest.state === 'open') { tryPickUpChest(); return; }
 
   if (activeWeapon().ammo > 0) { shoot(); return; }
@@ -801,7 +801,7 @@ function updatePrompt() {
   const chest = findNearestChest();
   if (!chest) { promptEl.classList.remove('visible'); return; }
   if (chest.state === 'closed') {
-    promptEl.textContent = 'Press [SPACE] to open chest';
+    promptEl.textContent = 'Press [E] to open chest';
   } else if (chest.state === 'open') {
     const label = chest.loot === 'potion' ? 'Healing Bottle' : chest.weaponType.name;
     promptEl.textContent = `Press [SPACE] to pick up ${label}`;
