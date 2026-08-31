@@ -298,6 +298,13 @@ body {
   text-align: center;
 }
 
+.skin-power {
+  font-size: 0.72rem;
+  color: var(--maroon);
+  opacity: 0.8;
+  text-align: center;
+}
+
 .skin-price {
   font-size: 0.8rem;
   opacity: 0.75;

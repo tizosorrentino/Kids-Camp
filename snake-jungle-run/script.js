@@ -31,12 +31,13 @@
   };
 
   // Snake color skins, bought in the lobby store with balls (fruit eaten).
-  // The starter yellow skin is free and always owned.
+  // The starter yellow skin is free and always owned. Red/Blue/Green also
+  // grant a power: press Space during play to instantly shrink the snake.
   const SKINS = [
-    { id: 'yellow', name: 'Jungle Yellow', price: 0, body: '#ffd23f', head: '#fff3c4' },
-    { id: 'red', name: 'Ruby Red', price: 25, body: '#e8483f', head: '#ffbcb8' },
-    { id: 'blue', name: 'Ocean Blue', price: 40, body: '#3f8fe8', head: '#bfe0ff' },
-    { id: 'green', name: 'Jungle Green', price: 60, body: '#3fbf5f', head: '#c2f2cc' },
+    { id: 'yellow', name: 'Jungle Yellow', price: 0, body: '#ffd23f', head: '#fff3c4', power: 0, powerLabel: 'No power' },
+    { id: 'red', name: 'Ruby Red', price: 25, body: '#e8483f', head: '#ffbcb8', power: 2, powerLabel: 'Space Bar: -2 blocks' },
+    { id: 'blue', name: 'Ocean Blue', price: 40, body: '#3f8fe8', head: '#bfe0ff', power: 4, powerLabel: 'Space Bar: -4 blocks' },
+    { id: 'green', name: 'Jungle Green', price: 60, body: '#3fbf5f', head: '#c2f2cc', power: 7, powerLabel: 'Space Bar: -7 blocks' },
   ];
 
   // ---------- DOM references ----------
@@ -252,8 +253,16 @@
   };
 
   window.addEventListener('keydown', (e) => {
+    if (state !== STATES.PLAYING) return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      activateSkinPower();
+      return;
+    }
+
     const dir = KEY_TO_DIR[e.key];
-    if (!dir || state !== STATES.PLAYING) return;
+    if (!dir) return;
 
     // Compare against the last buffered turn (not the on-screen direction),
     // so a fast second key-press can't queue a flip that only looks safe
@@ -324,6 +333,10 @@
       name.className = 'skin-name';
       name.textContent = skin.name;
 
+      const powerLine = document.createElement('div');
+      powerLine.className = 'skin-power';
+      powerLine.textContent = skin.powerLabel;
+
       const priceLine = document.createElement('div');
       priceLine.className = 'skin-price';
       priceLine.textContent = owned ? (equipped ? 'Equipped' : 'Owned') : `${skin.price} 🔵`;
@@ -361,6 +374,7 @@
 
       card.appendChild(swatch);
       card.appendChild(name);
+      card.appendChild(powerLine);
       card.appendChild(priceLine);
       card.appendChild(actionBtn);
       skinGridEl.appendChild(card);
@@ -492,6 +506,15 @@
     setTimeout(() => {
       setState(STATES.PLAYING);
     }, 900);
+  }
+
+  // ---------- Skin power ----------
+  function activateSkinPower() {
+    const skin = SKINS.find((s) => s.id === selectedSkinId) || SKINS[0];
+    if (!skin.power) return;
+    shrinkSnake(skin.power);
+    showFx('⚡', `${skin.name} Power! -${skin.power}`);
+    updateHud();
   }
 
   function shrinkSnake(amount) {
