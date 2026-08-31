@@ -579,13 +579,10 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE' && !e.repeat) tryOpenChest();
   if (e.code === 'KeyD' && !e.repeat) drinkPotion();
   if (e.code === 'Space' && !e.repeat) handleAction();
-  if (e.code >= 'Digit1' && e.code <= 'Digit4') {
-    const idx = Number(e.code.replace('Digit', '')) - 1;
-    if (inventory.weapons[idx]) {
-      inventory.activeIndex = idx;
-      setGunVisual(activeWeapon().type.color);
-      updateHUD();
-    }
+  if (e.code === 'KeyF' && !e.repeat) {
+    inventory.activeIndex = (inventory.activeIndex + 1) % inventory.weapons.length;
+    setGunVisual(activeWeapon().type.color);
+    updateHUD();
   }
   if (e.code === 'KeyJ' && state.onGround) {
     state.velocityY = CONFIG.jumpSpeed;
