@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arctic Alien Assault</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div id="crosshair">+</div>
+
+      <div id="health-panel">
+        <div class="panel-label">SOLDIER HEALTH</div>
+        <div id="health-bar-bg">
+          <div id="health-bar-fill"></div>
+        </div>
+        <div id="health-text">100%</div>
+      </div>
+
+      <div id="weapon-panel">
+        <div id="weapon-name">Shotgun</div>
+        <div id="ammo-text">160 / 160</div>
+      </div>
+
+      <div id="potion-panel">
+        <div id="potion-icon">&#127866;</div>
+        <div id="potion-count">0</div>
+        <div class="key-hint">[K] drink</div>
+      </div>
+
+      <div id="stats-panel">
+        <div>WAVE <span id="wave-num">1</span></div>
+        <div>KILLS <span id="kill-num">0</span></div>
+      </div>
+
+      <div id="prompt"></div>
+      <div id="toast"></div>
+      <div id="damage-flash"></div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="overlay">
+      <div class="overlay-box">
+        <h1>ARCTIC ALIEN ASSAULT</h1>
+        <p class="subtitle">Somewhere in the frozen north of Asia, the sky tore open.</p>
+        <div id="soldier-preview">
+          <canvas id="preview-canvas"></canvas>
+        </div>
+        <p class="lore">
+          You are the last soldier of the Northern Watch &mdash; a towering figure sealed inside
+          bullet-proof dark green armor and a reinforced combat helmet. The aliens have landed
+          in the ice fields. Hold the line, loot the crates, and survive.
+        </p>
+        <div class="controls-grid">
+          <div><b>Arrow Keys</b> Move</div>
+          <div><b>Mouse</b> Look</div>
+          <div><b>Left Click</b> Shoot</div>
+          <div><b>Space</b> Jump</div>
+          <div><b>Shift</b> Sprint</div>
+          <div><b>1-4</b> Switch Weapon</div>
+          <div><b>A</b> Open Chest</div>
+          <div><b>S</b> Pick Up Item</div>
+          <div><b>K</b> Drink Healing Potion</div>
+        </div>
+        <button id="start-btn">CLICK TO DEPLOY</button>
+      </div>
+    </div>
+
+    <!-- Pause Screen -->
+    <div id="pause-screen" class="overlay hidden">
+      <div class="overlay-box">
+        <h2>PAUSED</h2>
+        <p>Click anywhere to resume the fight.</p>
+      </div>
+    </div>
+
+    <!-- Death Screen -->
+    <div id="death-screen" class="overlay hidden">
+      <div class="overlay-box">
+        <h1 class="death-title">YOU DIED</h1>
+        <p id="death-stats"></p>
+        <button id="restart-btn">REDEPLOY</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>

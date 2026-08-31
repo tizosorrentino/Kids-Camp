@@ -1,0 +1,902 @@
+/* ============================================================
+   ARCTIC ALIEN ASSAULT
+   First-person 3D shooter built on three.js (no build step).
+   ============================================================ */
+
+const CONFIG = {
+  playerHitDamage: 3,      // % health lost per alien attack
+  shotgunDamage: 2,        // % health an alien loses per shot landed
+  alienMaxHealth: 5,       // % health pool of a single alien
+  maxAmmoPerGun: 160,
+  potionHeal: 25,          // % health restored per potion
+  interactRange: 4.5,
+  alienAttackRange: 17,
+  alienAttackCooldown: 1.8,
+  moveSpeed: 7,
+  sprintMultiplier: 1.6,
+  jumpSpeed: 7,
+  gravity: -18,
+  eyeHeight: 2.05,          // "very tall" soldier
+  mapHalf: 95,
+};
+
+const WEAPON_TYPES = [
+  { name: 'Shotgun', color: 0x2c3b2c, fireCooldown: 0.65, pellets: 3 },
+  { name: 'Pulse Rifle', color: 0x3a5a6b, fireCooldown: 0.16, pellets: 1 },
+  { name: 'Plasma Blaster', color: 0x5a3a6b, fireCooldown: 0.35, pellets: 1 },
+  { name: 'Auto Cannon', color: 0x6b5a3a, fireCooldown: 0.10, pellets: 1 },
+];
+
+/* ---------------- Sound (synthesized, no asset files) ---------------- */
+
+const SFX = (() => {
+  let ctx = null;
+  function ac() {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    return ctx;
+  }
+  function beep({ freq = 440, duration = 0.08, type = 'square', gain = 0.15, slide = 0 }) {
+    try {
+      const c = ac();
+      const osc = c.createOscillator();
+      const g = c.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, c.currentTime);
+      if (slide) osc.frequency.linearRampToValueAtTime(freq + slide, c.currentTime + duration);
+      g.gain.setValueAtTime(gain, c.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+      osc.connect(g).connect(c.destination);
+      osc.start();
+      osc.stop(c.currentTime + duration);
+    } catch (e) { /* audio unavailable, ignore */ }
+  }
+  return {
+    shoot: () => beep({ freq: 180, duration: 0.09, type: 'square', gain: 0.18, slide: -60 }),
+    empty: () => beep({ freq: 120, duration: 0.05, type: 'square', gain: 0.08 }),
+    alienHit: () => beep({ freq: 500, duration: 0.06, type: 'triangle', gain: 0.12, slide: 200 }),
+    alienDie: () => beep({ freq: 300, duration: 0.25, type: 'sawtooth', gain: 0.15, slide: -250 }),
+    playerHurt: () => beep({ freq: 140, duration: 0.18, type: 'sawtooth', gain: 0.2, slide: -80 }),
+    chestOpen: () => beep({ freq: 220, duration: 0.2, type: 'triangle', gain: 0.15, slide: 100 }),
+    pickup: () => beep({ freq: 500, duration: 0.15, type: 'sine', gain: 0.15, slide: 300 }),
+    drink: () => beep({ freq: 350, duration: 0.25, type: 'sine', gain: 0.15, slide: 150 }),
+    death: () => beep({ freq: 220, duration: 0.9, type: 'sawtooth', gain: 0.2, slide: -180 }),
+    denied: () => beep({ freq: 150, duration: 0.1, type: 'square', gain: 0.1 }),
+  };
+})();
+
+/* ---------------- Renderer / Scene / Camera ---------------- */
+
+const canvas = document.getElementById('game-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x151f2b, 25, 150);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+const playerRig = new THREE.Object3D();
+playerRig.position.set(0, CONFIG.eyeHeight, 10);
+playerRig.add(camera);
+scene.add(playerRig);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ---------------- Sky ---------------- */
+
+function buildSky() {
+  const skyGeo = new THREE.SphereGeometry(400, 24, 16);
+  const colors = [];
+  const pos = skyGeo.attributes.position;
+  const top = new THREE.Color(0x040914);
+  const horizon = new THREE.Color(0x2c4258);
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i) / 400;
+    const t = THREE.MathUtils.clamp((y + 0.15) / 0.9, 0, 1);
+    const c = top.clone().lerp(horizon, 1 - t);
+    colors.push(c.r, c.g, c.b);
+  }
+  skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false });
+  scene.add(new THREE.Mesh(skyGeo, skyMat));
+}
+buildSky();
+
+function auroraTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx2d = c.getContext('2d');
+  const grad = ctx2d.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, 'rgba(60,255,150,0)');
+  grad.addColorStop(0.5, 'rgba(60,255,150,0.35)');
+  grad.addColorStop(0.75, 'rgba(140,80,255,0.25)');
+  grad.addColorStop(1, 'rgba(60,255,150,0)');
+  ctx2d.fillStyle = grad;
+  ctx2d.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
+}
+
+const auroraStrips = [];
+for (let i = 0; i < 3; i++) {
+  const tex = auroraTexture();
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false, fog: false });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(120, 60), mat);
+  mesh.position.set((i - 1) * 70, 90 + i * 8, -180 - i * 20);
+  mesh.rotation.x = Math.PI / 2.4;
+  mesh.rotation.z = (i - 1) * 0.2;
+  scene.add(mesh);
+  auroraStrips.push(mesh);
+}
+
+/* ---------------- Lighting ---------------- */
+
+scene.add(new THREE.HemisphereLight(0x8fb3ff, 0xdfe9f0, 0.65));
+const sun = new THREE.DirectionalLight(0xcfe0ff, 0.7);
+sun.position.set(-60, 50, -30);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -100;
+sun.shadow.camera.right = 100;
+sun.shadow.camera.top = 100;
+sun.shadow.camera.bottom = -100;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x445566, 0.3));
+
+/* ---------------- Ground & Environment ---------------- */
+
+function buildGround() {
+  const size = CONFIG.mapHalf * 2 + 40;
+  const geo = new THREE.PlaneGeometry(size, size, 60, 60);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i);
+    const bump = Math.sin(x * 0.05) * Math.cos(y * 0.05) * 0.6 + Math.sin(x * 0.15 + y * 0.1) * 0.25;
+    pos.setZ(i, bump);
+  }
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xe7eef2, roughness: 0.95, metalness: 0 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+buildGround();
+
+const obstacles = []; // {position, radius} for simple collision
+
+function addTree(x, z) {
+  const group = new THREE.Group();
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.28, 1.6, 6),
+    new THREE.MeshStandardMaterial({ color: 0x3b2a20, roughness: 1 })
+  );
+  trunk.position.y = 0.8;
+  const foliageMat = new THREE.MeshStandardMaterial({ color: 0x1c3b2e, roughness: 0.9 });
+  for (let i = 0; i < 3; i++) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(1.4 - i * 0.35, 1.6, 7), foliageMat);
+    cone.position.y = 1.6 + i * 1.1;
+    cone.castShadow = true;
+    group.add(cone);
+  }
+  trunk.castShadow = true;
+  group.add(trunk);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  obstacles.push({ x, z, radius: 0.9 });
+}
+
+function addRock(x, z, scale) {
+  const rock = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(scale, 0),
+    new THREE.MeshStandardMaterial({ color: 0x8b95a0, roughness: 1, flatShading: true })
+  );
+  rock.position.set(x, scale * 0.4, z);
+  rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+  rock.castShadow = true;
+  rock.receiveShadow = true;
+  scene.add(rock);
+  obstacles.push({ x, z, radius: scale * 0.9 });
+}
+
+function scatterEnvironment() {
+  const half = CONFIG.mapHalf;
+  for (let i = 0; i < 55; i++) {
+    const x = (Math.random() - 0.5) * half * 2;
+    const z = (Math.random() - 0.5) * half * 2;
+    if (Math.hypot(x, z) < 12) continue;
+    addTree(x, z);
+  }
+  for (let i = 0; i < 30; i++) {
+    const x = (Math.random() - 0.5) * half * 2;
+    const z = (Math.random() - 0.5) * half * 2;
+    if (Math.hypot(x, z) < 8) continue;
+    addRock(x, z, 0.6 + Math.random() * 1.1);
+  }
+  // distant mountains
+  const mountainMat = new THREE.MeshStandardMaterial({ color: 0x3d4f63, roughness: 1, flatShading: true });
+  for (let i = 0; i < 18; i++) {
+    const angle = (i / 18) * Math.PI * 2;
+    const r = half + 30 + Math.random() * 20;
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(18 + Math.random() * 12, 40 + Math.random() * 30, 6), mountainMat);
+    mesh.position.set(Math.cos(angle) * r, 15, Math.sin(angle) * r);
+    scene.add(mesh);
+  }
+}
+scatterEnvironment();
+
+/* ---------------- Shared Geometry Helpers ---------------- */
+// three.js r128 (loaded via CDN) predates CapsuleGeometry, so build capsules
+// from a cylinder + two sphere caps instead.
+function makeCapsule(radius, length, material, castShadow = false) {
+  const group = new THREE.Group();
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 8), material);
+  const capTop = new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 6), material);
+  capTop.position.y = length / 2;
+  const capBottom = new THREE.Mesh(new THREE.SphereGeometry(radius, 8, 6), material);
+  capBottom.position.y = -length / 2;
+  if (castShadow) { cyl.castShadow = true; capTop.castShadow = true; capBottom.castShadow = true; }
+  group.add(cyl, capTop, capBottom);
+  return group;
+}
+
+/* ---------------- Player Weapon Viewmodel ---------------- */
+
+const weaponGroup = new THREE.Group();
+weaponGroup.position.set(0.32, -0.32, -0.6);
+camera.add(weaponGroup);
+
+function buildGunMesh(color) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 0.12, 0.55),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.3 })
+  );
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.028, 0.028, 0.4, 8),
+    new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.4, metalness: 0.6 })
+  );
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.02, -0.45);
+  const grip = new THREE.Mesh(
+    new THREE.BoxGeometry(0.08, 0.2, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 })
+  );
+  grip.position.set(0, -0.14, 0.15);
+  g.add(body, barrel, grip);
+  return g;
+}
+
+const muzzleFlash = new THREE.PointLight(0xfff2b0, 0, 4);
+muzzleFlash.position.set(0, 0.05, -0.9);
+weaponGroup.add(muzzleFlash);
+
+let currentGunMesh = null;
+function setGunVisual(color) {
+  if (currentGunMesh) weaponGroup.remove(currentGunMesh);
+  currentGunMesh = buildGunMesh(color);
+  weaponGroup.add(currentGunMesh);
+}
+
+/* ---------------- Soldier Preview (start screen) ---------------- */
+
+function buildSoldierPreview() {
+  const pc = document.getElementById('preview-canvas');
+  const pRenderer = new THREE.WebGLRenderer({ canvas: pc, antialias: true, alpha: true });
+  pRenderer.setSize(160, 200);
+  pRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const pScene = new THREE.Scene();
+  const pCam = new THREE.PerspectiveCamera(35, 160 / 200, 0.1, 20);
+  pCam.position.set(0, 1.1, 4.2);
+  pCam.lookAt(0, 0.9, 0);
+
+  pScene.add(new THREE.HemisphereLight(0xbcd8ff, 0x203020, 0.9));
+  const key = new THREE.DirectionalLight(0xffffff, 0.8);
+  key.position.set(2, 3, 3);
+  pScene.add(key);
+
+  const armorMat = new THREE.MeshStandardMaterial({ color: 0x203c26, roughness: 0.5, metalness: 0.35 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.6 });
+  const visorMat = new THREE.MeshStandardMaterial({ color: 0x2ea6ff, emissive: 0x0d3a55, roughness: 0.2, metalness: 0.6 });
+
+  const soldier = new THREE.Group();
+  const torso = makeCapsule(0.42, 0.9, armorMat);
+  torso.position.y = 0.75;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 16), armorMat);
+  head.position.y = 1.55;
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.06), visorMat);
+  visor.position.set(0, 1.57, 0.3);
+  const legL = makeCapsule(0.16, 0.7, darkMat);
+  legL.position.set(-0.2, 0.05, 0);
+  const legR = legL.clone();
+  legR.position.x = 0.2;
+  const armL = makeCapsule(0.13, 0.75, armorMat);
+  armL.position.set(-0.56, 0.75, 0);
+  const armR = armL.clone();
+  armR.position.x = 0.56;
+
+  soldier.add(torso, head, visor, legL, legR, armL, armR);
+  pScene.add(soldier);
+
+  function animatePreview() {
+    requestAnimationFrame(animatePreview);
+    soldier.rotation.y += 0.012;
+    pRenderer.render(pScene, pCam);
+  }
+  animatePreview();
+}
+buildSoldierPreview();
+
+/* ---------------- Chests ---------------- */
+
+const CHEST_POSITIONS = [
+  [18, -14], [-24, 10], [28, 26], [-30, -22], [2, 40],
+  [40, -6], [-40, 18], [10, -38], [-14, 34], [46, 30],
+];
+
+class Chest {
+  constructor(x, z) {
+    this.state = 'closed'; // closed -> open -> looted
+    this.loot = Math.random() < 0.45 ? 'potion' : 'weapon';
+    this.weaponType = WEAPON_TYPES[Math.floor(Math.random() * WEAPON_TYPES.length)];
+
+    this.group = new THREE.Group();
+    this.group.position.set(x, 0, z);
+
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0x4a3421, roughness: 0.8 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x8a7043, roughness: 0.5, metalness: 0.4 });
+
+    this.base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.7), baseMat);
+    this.base.position.y = 0.3;
+    this.base.castShadow = true;
+
+    this.lid = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.35, 0.75), trimMat);
+    this.lid.geometry.translate(0, 0, 0.35); // pivot at the hinge edge, not the center
+    this.lid.position.set(0, 0.6, -0.35);
+    this.lid.castShadow = true;
+
+    this.group.add(this.base, this.lid);
+
+    this.glow = new THREE.PointLight(0x7dffb3, 0.8, 3);
+    this.glow.position.set(0, 1, 0);
+    this.group.add(this.glow);
+
+    scene.add(this.group);
+  }
+
+  distanceTo(pos) {
+    return Math.hypot(this.group.position.x - pos.x, this.group.position.z - pos.z);
+  }
+
+  open() {
+    this.state = 'open';
+    this._lidT = 0;
+    SFX.chestOpen();
+  }
+
+  update(dt) {
+    if (this.state === 'open' && this._lidT < 1) {
+      this._lidT = Math.min(1, this._lidT + dt * 2.2);
+      this.lid.rotation.x = -this._lidT * (Math.PI / 1.6);
+    }
+    this.glow.intensity = this.state === 'open' ? 0 : 0.6 + Math.sin(performance.now() * 0.003) * 0.3;
+  }
+}
+
+const chests = CHEST_POSITIONS.map(([x, z]) => new Chest(x, z));
+
+/* ---------------- Aliens ---------------- */
+
+class Alien {
+  constructor() {
+    this.health = CONFIG.alienMaxHealth;
+    this.maxHealth = CONFIG.alienMaxHealth;
+    this.attackTimer = Math.random() * CONFIG.alienAttackCooldown;
+    this.dead = false;
+    this.speed = 2.6 + Math.random() * 1.2;
+    this.preferredRange = 10 + Math.random() * 6;
+
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3d8b5c, emissive: 0x0e3d22, roughness: 0.4, metalness: 0.3 });
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 1.5 });
+
+    this.group = new THREE.Group();
+    const torso = makeCapsule(0.45, 1.0, bodyMat, true);
+    torso.position.y = 1.1;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), bodyMat);
+    head.position.y = 1.9;
+    head.castShadow = true;
+    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), eyeMat);
+    eyeL.position.set(-0.13, 1.95, 0.28);
+    const eyeR = eyeL.clone();
+    eyeR.position.x = 0.13;
+    const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), bodyMat);
+    armL.position.set(-0.55, 1.15, 0);
+    armL.rotation.z = 0.3;
+    const armR = armL.clone();
+    armR.position.x = 0.55;
+    armR.rotation.z = -0.3;
+    const gun = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.12, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5, metalness: 0.6 })
+    );
+    gun.position.set(0.75, 1.05, 0.15);
+    this.gunMesh = gun;
+
+    this.group.add(torso, head, eyeL, eyeR, armL, armR, gun);
+
+    this.hpBarBg = makeBillboardBar(0x222222);
+    this.hpBarFill = makeBillboardBar(0xff3d3d);
+    this.hpBarBg.position.y = 2.5;
+    this.hpBarFill.position.y = 2.5;
+    this.hpBarFill.position.z = 0.001;
+    this.group.add(this.hpBarBg, this.hpBarFill);
+
+    const spawnAngle = Math.random() * Math.PI * 2;
+    const spawnRadius = 55 + Math.random() * 25;
+    this.group.position.set(Math.cos(spawnAngle) * spawnRadius, 0, Math.sin(spawnAngle) * spawnRadius);
+
+    scene.add(this.group);
+  }
+
+  updateHpBar() {
+    const pct = Math.max(0, this.health / this.maxHealth);
+    this.hpBarFill.scale.x = Math.max(0.001, pct);
+    this.hpBarFill.position.x = -(1 - pct) * 0.3;
+  }
+
+  takeDamage(amount) {
+    if (this.dead) return;
+    this.health = Math.max(0, this.health - amount);
+    this.updateHpBar();
+    SFX.alienHit();
+    if (this.health <= 0) this.die();
+  }
+
+  die() {
+    this.dead = true;
+    SFX.alienDie();
+    scene.remove(this.group);
+    state.kills++;
+    updateHUD();
+  }
+
+  update(dt, playerPos) {
+    if (this.dead) return;
+    this.group.lookAt(playerPos.x, this.group.position.y, playerPos.z);
+    const dist = this.group.position.distanceTo(new THREE.Vector3(playerPos.x, this.group.position.y, playerPos.z));
+
+    if (dist > this.preferredRange + 1) {
+      const dir = new THREE.Vector3(playerPos.x - this.group.position.x, 0, playerPos.z - this.group.position.z).normalize();
+      this.group.position.addScaledVector(dir, this.speed * dt);
+    }
+
+    this.attackTimer -= dt;
+    if (dist <= CONFIG.alienAttackRange && this.attackTimer <= 0) {
+      this.attackTimer = CONFIG.alienAttackCooldown + Math.random() * 0.6;
+      this.fireAt(playerPos);
+    }
+
+    this.hpBarBg.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+    this.hpBarFill.lookAt(camera.getWorldPosition(new THREE.Vector3()));
+  }
+
+  fireAt(playerPos) {
+    const muzzle = new THREE.Vector3();
+    this.gunMesh.getWorldPosition(muzzle);
+    spawnAlienProjectile(muzzle, playerPos.clone().add(new THREE.Vector3(0, 1.2, 0)));
+  }
+}
+
+function makeBillboardBar(color) {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.6, 0.08),
+    new THREE.MeshBasicMaterial({ color, depthTest: false })
+  );
+  mesh.renderOrder = 10;
+  return mesh;
+}
+
+const aliens = [];
+const alienProjectiles = [];
+
+function spawnAlienProjectile(from, to) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xff5544 })
+  );
+  mesh.position.copy(from);
+  const light = new THREE.PointLight(0xff5544, 1, 3);
+  mesh.add(light);
+  scene.add(mesh);
+  const dir = to.clone().sub(from).normalize();
+  alienProjectiles.push({ mesh, dir, speed: 26, life: 2.5, target: to });
+}
+
+/* ---------------- Game State ---------------- */
+
+const state = {
+  health: 100,
+  potions: 0,
+  kills: 0,
+  wave: 1,
+  alienIsAlive: () => aliens.some(a => !a.dead),
+  running: false,
+  paused: true,
+  gameOver: false,
+  velocityY: 0,
+  onGround: true,
+  activeChest: null,
+};
+
+const inventory = {
+  weapons: [
+    { type: WEAPON_TYPES[0], ammo: CONFIG.maxAmmoPerGun },
+  ],
+  activeIndex: 0,
+};
+
+function activeWeapon() {
+  return inventory.weapons[inventory.activeIndex];
+}
+
+setGunVisual(activeWeapon().type.color);
+
+/* ---------------- Input ---------------- */
+
+const keys = {};
+let fireCooldownLeft = 0;
+let yaw = 0, pitch = 0;
+
+document.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (!state.running || state.paused) return;
+
+  if (e.code === 'KeyA') tryOpenChest();
+  if (e.code === 'KeyS') tryPickUpChest();
+  if (e.code === 'KeyK') drinkPotion();
+  if (e.code >= 'Digit1' && e.code <= 'Digit4') {
+    const idx = Number(e.code.replace('Digit', '')) - 1;
+    if (inventory.weapons[idx]) {
+      inventory.activeIndex = idx;
+      setGunVisual(activeWeapon().type.color);
+      updateHUD();
+    }
+  }
+  if (e.code === 'Space' && state.onGround) {
+    state.velocityY = CONFIG.jumpSpeed;
+    state.onGround = false;
+  }
+});
+document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+document.addEventListener('mousemove', (e) => {
+  if (document.pointerLockElement !== canvas) return;
+  yaw -= e.movementX * 0.0022;
+  pitch -= e.movementY * 0.0022;
+  pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 2.3, Math.PI / 2.3);
+  playerRig.rotation.y = yaw;
+  camera.rotation.x = pitch;
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  if (document.pointerLockElement !== canvas) return;
+  if (e.button === 0) shoot();
+});
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === canvas) {
+    hide('pause-screen');
+    state.paused = false;
+  } else if (state.running && !state.gameOver) {
+    show('pause-screen');
+    state.paused = true;
+  }
+});
+
+/* ---------------- Shooting ---------------- */
+
+const raycaster = new THREE.Raycaster();
+
+function shoot() {
+  if (state.gameOver) return;
+  const wpn = activeWeapon();
+  if (fireCooldownLeft > 0) return;
+  if (wpn.ammo <= 0) { SFX.empty(); flashToast('OUT OF AMMO'); return; }
+
+  fireCooldownLeft = wpn.type.fireCooldown;
+  wpn.ammo--;
+  SFX.shoot();
+  muzzleFlash.intensity = 3.5;
+
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  const camPos = new THREE.Vector3();
+  camera.getWorldPosition(camPos);
+
+  const pellets = wpn.type.pellets || 1;
+  const hitAliens = new Set();
+  for (let p = 0; p < pellets; p++) {
+    const spread = wpn.type.pellets > 1 ? 0.06 : 0.01;
+    const dir = camDir.clone();
+    dir.x += (Math.random() - 0.5) * spread;
+    dir.y += (Math.random() - 0.5) * spread;
+    dir.z += (Math.random() - 0.5) * spread;
+    dir.normalize();
+    raycaster.set(camPos, dir);
+    raycaster.far = 80;
+
+    const meshes = aliens.filter(a => !a.dead).map(a => a.group);
+    const hits = raycaster.intersectObjects(meshes, true);
+    if (hits.length > 0) {
+      const alien = aliens.find(a => a.group === hits[0].object || a.group.getObjectById(hits[0].object.id));
+      if (alien) hitAliens.add(alien);
+    }
+  }
+  hitAliens.forEach(a => a.takeDamage(CONFIG.shotgunDamage));
+
+  updateHUD();
+}
+
+/* ---------------- Interaction: chests & potions ---------------- */
+
+function findNearestChest() {
+  let nearest = null, best = Infinity;
+  for (const c of chests) {
+    const d = c.distanceTo(playerRig.position);
+    if (d < best) { best = d; nearest = c; }
+  }
+  return best <= CONFIG.interactRange ? nearest : null;
+}
+
+function tryOpenChest() {
+  const chest = findNearestChest();
+  if (chest && chest.state === 'closed') chest.open();
+}
+
+function tryPickUpChest() {
+  const chest = findNearestChest();
+  if (!chest || chest.state !== 'open') return;
+
+  if (chest.loot === 'potion') {
+    state.potions++;
+    flashToast('+1 HEALING BOTTLE');
+  } else {
+    const existing = inventory.weapons.find(w => w.type.name === chest.weaponType.name);
+    if (existing) {
+      existing.ammo = Math.min(CONFIG.maxAmmoPerGun, existing.ammo + CONFIG.maxAmmoPerGun);
+      flashToast(`${chest.weaponType.name} AMMO REFILLED`);
+    } else {
+      inventory.weapons.push({ type: chest.weaponType, ammo: CONFIG.maxAmmoPerGun });
+      flashToast(`PICKED UP ${chest.weaponType.name.toUpperCase()}`);
+    }
+  }
+  SFX.pickup();
+  chest.state = 'looted';
+  chest.glow.intensity = 0;
+  updateHUD();
+}
+
+function drinkPotion() {
+  if (state.potions <= 0) { SFX.denied(); flashToast('NO POTIONS LEFT'); return; }
+  if (state.health >= 100) { flashToast('HEALTH ALREADY FULL'); return; }
+  state.potions--;
+  state.health = Math.min(100, state.health + CONFIG.potionHeal);
+  SFX.drink();
+  flashToast('+25% HEALTH');
+  updateHUD();
+}
+
+/* ---------------- Damage / Death ---------------- */
+
+function damagePlayer(amount) {
+  if (state.gameOver) return;
+  state.health = Math.max(0, state.health - amount);
+  SFX.playerHurt();
+  flashDamage();
+  updateHUD();
+  if (state.health <= 0) killPlayer();
+}
+
+function killPlayer() {
+  state.gameOver = true;
+  state.paused = true;
+  SFX.death();
+  document.exitPointerLock();
+  document.getElementById('death-stats').textContent =
+    `You survived to Wave ${state.wave} with ${state.kills} confirmed kills.`;
+  show('death-screen');
+}
+
+/* ---------------- HUD helpers ---------------- */
+
+const healthFill = document.getElementById('health-bar-fill');
+const healthText = document.getElementById('health-text');
+const weaponName = document.getElementById('weapon-name');
+const ammoText = document.getElementById('ammo-text');
+const potionCount = document.getElementById('potion-count');
+const waveNum = document.getElementById('wave-num');
+const killNum = document.getElementById('kill-num');
+const promptEl = document.getElementById('prompt');
+const toastEl = document.getElementById('toast');
+const damageFlashEl = document.getElementById('damage-flash');
+
+function updateHUD() {
+  healthFill.style.width = `${state.health}%`;
+  healthText.textContent = `${Math.round(state.health)}%`;
+  const wpn = activeWeapon();
+  weaponName.textContent = wpn.type.name;
+  ammoText.textContent = `${wpn.ammo} / ${CONFIG.maxAmmoPerGun}`;
+  potionCount.textContent = state.potions;
+  waveNum.textContent = state.wave;
+  killNum.textContent = state.kills;
+}
+
+let toastTimer = null;
+function flashToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('visible'), 1400);
+}
+
+let dmgFlashTimer = null;
+function flashDamage() {
+  damageFlashEl.classList.add('visible');
+  clearTimeout(dmgFlashTimer);
+  dmgFlashTimer = setTimeout(() => damageFlashEl.classList.remove('visible'), 200);
+}
+
+function updatePrompt() {
+  const chest = findNearestChest();
+  if (!chest) { promptEl.classList.remove('visible'); return; }
+  if (chest.state === 'closed') {
+    promptEl.textContent = 'Press [A] to open chest';
+  } else if (chest.state === 'open') {
+    const label = chest.loot === 'potion' ? 'Healing Bottle' : chest.weaponType.name;
+    promptEl.textContent = `Press [S] to pick up ${label}`;
+  } else {
+    promptEl.classList.remove('visible');
+    return;
+  }
+  promptEl.classList.add('visible');
+}
+
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+/* ---------------- Waves ---------------- */
+
+let waveSpawnTimer = 0;
+
+function startWave() {
+  const count = Math.min(3 + state.wave, 12);
+  for (let i = 0; i < count; i++) aliens.push(new Alien());
+  updateHUD();
+}
+
+function checkWaveProgress(dt) {
+  waveSpawnTimer -= dt;
+  if (waveSpawnTimer > 0) return;
+  const remaining = aliens.filter(a => !a.dead).length;
+  if (remaining === 0) {
+    state.wave++;
+    waveSpawnTimer = 2.5;
+    startWave();
+    flashToast(`WAVE ${state.wave} INCOMING`);
+  }
+}
+
+/* ---------------- Movement ---------------- */
+
+function updateMovement(dt) {
+  const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
+  const speed = CONFIG.moveSpeed * (sprint ? CONFIG.sprintMultiplier : 1);
+
+  const forward = new THREE.Vector3(Math.sin(playerRig.rotation.y), 0, Math.cos(playerRig.rotation.y)).multiplyScalar(-1);
+  const right = new THREE.Vector3(-forward.z, 0, forward.x);
+
+  const move = new THREE.Vector3();
+  if (keys['ArrowUp']) move.add(forward);
+  if (keys['ArrowDown']) move.sub(forward);
+  if (keys['ArrowLeft']) move.sub(right);
+  if (keys['ArrowRight']) move.add(right);
+  if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed * dt);
+
+  const nextX = playerRig.position.x + move.x;
+  const nextZ = playerRig.position.z + move.z;
+
+  let blocked = false;
+  for (const o of obstacles) {
+    if (Math.hypot(nextX - o.x, nextZ - o.z) < o.radius + 0.6) { blocked = true; break; }
+  }
+  if (!blocked) {
+    playerRig.position.x = THREE.MathUtils.clamp(nextX, -CONFIG.mapHalf, CONFIG.mapHalf);
+    playerRig.position.z = THREE.MathUtils.clamp(nextZ, -CONFIG.mapHalf, CONFIG.mapHalf);
+  }
+
+  // gravity / jump
+  state.velocityY += CONFIG.gravity * dt;
+  playerRig.position.y += state.velocityY * dt;
+  if (playerRig.position.y <= CONFIG.eyeHeight) {
+    playerRig.position.y = CONFIG.eyeHeight;
+    state.velocityY = 0;
+    state.onGround = true;
+  }
+
+  // weapon bob
+  const moving = move.lengthSq() > 0 && state.onGround;
+  const t = performance.now() * 0.012;
+  weaponGroup.position.y = -0.32 + (moving ? Math.sin(t) * 0.015 : 0);
+  weaponGroup.position.x = 0.32 + (moving ? Math.cos(t * 0.5) * 0.01 : 0);
+}
+
+/* ---------------- Main Loop ---------------- */
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+
+  if (muzzleFlash.intensity > 0) muzzleFlash.intensity = Math.max(0, muzzleFlash.intensity - dt * 20);
+  if (fireCooldownLeft > 0) fireCooldownLeft -= dt;
+
+  auroraStrips.forEach((m, i) => {
+    m.material.opacity = 0.55 + Math.sin(performance.now() * 0.0003 + i) * 0.35;
+  });
+
+  if (state.running && !state.paused && !state.gameOver) {
+    updateMovement(dt);
+
+    for (const chest of chests) chest.update(dt);
+    updatePrompt();
+
+    const playerPos = playerRig.position;
+    for (const alien of aliens) alien.update(dt, playerPos);
+
+    for (let i = alienProjectiles.length - 1; i >= 0; i--) {
+      const proj = alienProjectiles[i];
+      proj.mesh.position.addScaledVector(proj.dir, proj.speed * dt);
+      proj.life -= dt;
+      const dist = proj.mesh.position.distanceTo(playerPos);
+      if (dist < 1.2) {
+        damagePlayer(CONFIG.playerHitDamage);
+        scene.remove(proj.mesh);
+        alienProjectiles.splice(i, 1);
+        continue;
+      }
+      if (proj.life <= 0) {
+        scene.remove(proj.mesh);
+        alienProjectiles.splice(i, 1);
+      }
+    }
+
+    checkWaveProgress(dt);
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ---------------- Start / Restart Flow ---------------- */
+
+document.getElementById('start-btn').addEventListener('click', () => {
+  hide('start-screen');
+  state.running = true;
+  canvas.requestPointerLock();
+  if (aliens.length === 0) startWave();
+  updateHUD();
+});
+
+document.getElementById('pause-screen').addEventListener('click', () => {
+  if (state.running && !state.gameOver) canvas.requestPointerLock();
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => {
+  window.location.reload();
+});
