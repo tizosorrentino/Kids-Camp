@@ -18,7 +18,7 @@
   const MIN_TICK_MS = 90;         // fastest the game is allowed to get
   const SPEEDUP_PER_BITE = 1.5;   // ms shaved off per bite eaten
   const HIGH_SCORE_KEY = 'snakeJungleRun.highScore';
-  const BALLS_KEY = 'snakeJungleRun.balls';
+  const GEMS_KEY = 'snakeJungleRun.gems';
   const OWNED_SKINS_KEY = 'snakeJungleRun.ownedSkins';
   const SELECTED_SKIN_KEY = 'snakeJungleRun.selectedSkin';
   const ELA_QUESTION_CHANCE = 0.25; // about 1 in 4 questions is an easy word question instead of math
@@ -30,7 +30,17 @@
     impossible: { min: 12, max: 20 },
   };
 
-  // Snake color skins, bought in the lobby store with balls (fruit eaten).
+  // Different gem colors a pickup can randomly appear as. Purely visual
+  // variety -- every gem is worth the same 1 currency toward the store.
+  const GEM_COLORS = [
+    { fill: '#ff5c5c', shine: '#ffc2c2' },
+    { fill: '#4fa8ff', shine: '#c2e2ff' },
+    { fill: '#4fd67a', shine: '#c2f5d4' },
+    { fill: '#c26bff', shine: '#e6c9ff' },
+    { fill: '#ffd23f', shine: '#fff0b8' },
+  ];
+
+  // Snake color skins, bought in the lobby store with gems collected in-game.
   // The starter yellow skin is free and always owned. Red/Blue/Green also
   // grant a power: press Space during play to instantly shrink the snake.
   const SKINS = [
@@ -47,7 +57,7 @@
   const highScoreValueEl = document.getElementById('high-score-value');
   const streakValueEl = document.getElementById('streak-value');
   const multiplierValueEl = document.getElementById('multiplier-value');
-  const ballsValueEl = document.getElementById('balls-value');
+  const gemsValueEl = document.getElementById('gems-value');
   const progressDots = Array.from(document.querySelectorAll('.progress-dot'));
   const progressLabel = document.getElementById('quiz-progress-label');
   const fxLayer = document.getElementById('fx-layer');
@@ -84,7 +94,7 @@
   // in before the snake has actually moved (the classic "turned into my own
   // neck" bug).
   let directionQueue = [];
-  let food = { x: 0, y: 0 };
+  let food = { x: 0, y: 0, colorIndex: 0 };
   let cubesEaten = 0;
   let score = 0;
   let highScore = Number(localStorage.getItem(HIGH_SCORE_KEY)) || 0;
@@ -95,9 +105,9 @@
   let currentQuestion = null;
   let difficulty = 'medium';
 
-  // Balls are a permanent currency (1 per fruit eaten, saved across games)
+  // Gems are a permanent currency (1 per gem collected, saved across games)
   // spent in the lobby store on snake color skins.
-  let totalBalls = Number(localStorage.getItem(BALLS_KEY)) || 0;
+  let totalGems = Number(localStorage.getItem(GEMS_KEY)) || 0;
 
   let ownedSkins = ['yellow'];
   try {
@@ -221,6 +231,7 @@
       candidate = {
         x: Math.floor(Math.random() * GRID_SIZE),
         y: Math.floor(Math.random() * GRID_SIZE),
+        colorIndex: Math.floor(Math.random() * GEM_COLORS.length),
       };
     } while (snake.some((seg) => seg.x === candidate.x && seg.y === candidate.y));
     food = candidate;
@@ -236,7 +247,7 @@
     highScoreValueEl.textContent = highScore;
     streakValueEl.textContent = streak;
     multiplierValueEl.textContent = `x${currentMultiplier()}`;
-    ballsValueEl.textContent = totalBalls;
+    gemsValueEl.textContent = totalGems;
 
     const bitesIntoCycle = cubesEaten % QUIZ_EVERY_N_BITES;
     progressDots.forEach((dot, i) => dot.classList.toggle('filled', i < bitesIntoCycle));
@@ -315,7 +326,7 @@
 
   // ---------- Skin store ----------
   function renderStore() {
-    storeBalanceEl.textContent = totalBalls;
+    storeBalanceEl.textContent = totalGems;
     skinGridEl.innerHTML = '';
 
     SKINS.forEach((skin) => {
@@ -339,7 +350,7 @@
 
       const priceLine = document.createElement('div');
       priceLine.className = 'skin-price';
-      priceLine.textContent = owned ? (equipped ? 'Equipped' : 'Owned') : `${skin.price} 🔵`;
+      priceLine.textContent = owned ? (equipped ? 'Equipped' : 'Owned') : `${skin.price} 💎`;
 
       const actionBtn = document.createElement('button');
       actionBtn.type = 'button';
@@ -358,13 +369,13 @@
         });
       } else {
         actionBtn.textContent = 'Buy';
-        actionBtn.disabled = totalBalls < skin.price;
+        actionBtn.disabled = totalGems < skin.price;
         actionBtn.addEventListener('click', () => {
-          if (totalBalls < skin.price) return;
-          totalBalls -= skin.price;
+          if (totalGems < skin.price) return;
+          totalGems -= skin.price;
           ownedSkins.push(skin.id);
           selectedSkinId = skin.id;
-          localStorage.setItem(BALLS_KEY, String(totalBalls));
+          localStorage.setItem(GEMS_KEY, String(totalGems));
           localStorage.setItem(OWNED_SKINS_KEY, JSON.stringify(ownedSkins));
           localStorage.setItem(SELECTED_SKIN_KEY, selectedSkinId);
           renderStore();
@@ -432,8 +443,8 @@
     if (ateFood) {
       cubesEaten += 1;
       score += BASE_POINTS_PER_BITE * currentMultiplier();
-      totalBalls += 1;
-      localStorage.setItem(BALLS_KEY, String(totalBalls));
+      totalGems += 1;
+      localStorage.setItem(GEMS_KEY, String(totalGems));
       tickMs = Math.max(MIN_TICK_MS, tickMs - SPEEDUP_PER_BITE);
       placeFood();
       updateHud();
@@ -560,16 +571,39 @@
   }
 
   function drawFood() {
+    const gem = GEM_COLORS[food.colorIndex] || GEM_COLORS[0];
     const cx = food.x * CELL_PX + CELL_PX / 2;
     const cy = food.y * CELL_PX + CELL_PX / 2;
-    ctx.fillStyle = '#ffffff';
+    const r = CELL_PX * 0.4;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // Diamond-cut gem silhouette.
     ctx.beginPath();
-    ctx.arc(cx, cy, CELL_PX * 0.38, 0, Math.PI * 2);
+    ctx.moveTo(0, -r);
+    ctx.lineTo(r * 0.8, -r * 0.15);
+    ctx.lineTo(r * 0.5, r * 0.85);
+    ctx.lineTo(-r * 0.5, r * 0.85);
+    ctx.lineTo(-r * 0.8, -r * 0.15);
+    ctx.closePath();
+    ctx.fillStyle = gem.fill;
     ctx.fill();
-    ctx.fillStyle = '#ffd23f';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Shine facet.
     ctx.beginPath();
-    ctx.arc(cx, cy, CELL_PX * 0.16, 0, Math.PI * 2);
+    ctx.moveTo(0, -r);
+    ctx.lineTo(r * 0.8, -r * 0.15);
+    ctx.lineTo(0, r * 0.05);
+    ctx.closePath();
+    ctx.fillStyle = gem.shine;
+    ctx.globalAlpha = 0.75;
     ctx.fill();
+
+    ctx.restore();
   }
 
   function drawSnake() {
