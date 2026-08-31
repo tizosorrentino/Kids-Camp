@@ -14,6 +14,13 @@
     <div id="hud">
       <div id="crosshair">+</div>
 
+      <div id="boss-panel" class="hidden">
+        <div id="boss-label">LEVEL 1 BOSS</div>
+        <div id="boss-bar-bg">
+          <div id="boss-bar-fill"></div>
+        </div>
+      </div>
+
       <div id="health-panel">
         <div class="panel-label">SOLDIER HEALTH</div>
         <div id="health-bar-bg">
@@ -34,7 +41,7 @@
       </div>
 
       <div id="stats-panel">
-        <div>WAVE <span id="wave-num">1</span></div>
+        <div>LEVEL <span id="level-num">1</span>/20</div>
         <div>KILLS <span id="kill-num">0</span></div>
         <div>BRAINPOWER <span id="quiz-score">0/0</span></div>
       </div>
@@ -55,7 +62,10 @@
         <p class="lore">
           You are the last soldier of the Northern Watch &mdash; a towering figure sealed inside
           bullet-proof dark green armor and a reinforced combat helmet. The aliens have landed
-          in the ice fields. Hold the line, loot the crates, and survive.
+          in the ice fields. Hold the line, loot the crates, and survive &mdash; through all
+          20 checkpoints. Each level ends in a boss fight, and every boss is tougher than the
+          last: the Level 1 boss has 10% health, and it climbs by 10% every level after that,
+          all the way up to 200% on Level 20.
         </p>
         <div class="controls-grid">
           <div><b>Arrow Keys</b> Move</div>
@@ -68,7 +78,7 @@
           <div><b>S</b> Pick Up Item</div>
           <div><b>K</b> Drink Healing Potion</div>
         </div>
-        <p class="lore">Heads up, recruit: every time you die or clear a wave, you'll be
+        <p class="lore">Heads up, recruit: every time you die or clear a level, you'll be
           quizzed on math or language arts. Answer right to keep fighting!</p>
         <button id="start-btn">CLICK TO DEPLOY</button>
       </div>
@@ -85,7 +95,7 @@
     <!-- Quiz Screen -->
     <div id="quiz-screen" class="overlay hidden">
       <div class="overlay-box quiz-box">
-        <h2 id="quiz-title">WAVE CLEARED!</h2>
+        <h2 id="quiz-title">LEVEL CLEARED!</h2>
         <p id="quiz-subtitle" class="subtitle">Answer correctly to continue</p>
         <p id="quiz-question"></p>
         <div id="quiz-choices"></div>
@@ -100,6 +110,15 @@
         <h1 class="death-title">YOU DIED</h1>
         <p id="death-stats"></p>
         <button id="restart-btn">REDEPLOY</button>
+      </div>
+    </div>
+
+    <!-- Victory Screen -->
+    <div id="victory-screen" class="overlay hidden">
+      <div class="overlay-box">
+        <h1 class="victory-title">MISSION COMPLETE!</h1>
+        <p id="victory-stats"></p>
+        <button id="victory-restart-btn">PLAY AGAIN</button>
       </div>
     </div>
   </div>

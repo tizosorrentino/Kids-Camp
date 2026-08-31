@@ -51,6 +51,40 @@ html, body {
   margin-bottom: 2px;
 }
 
+#boss-panel {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 420px;
+  max-width: 60vw;
+  text-align: center;
+}
+
+#boss-label {
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: #ffb3f0;
+  text-shadow: 0 0 6px rgba(210, 61, 255, 0.6);
+  margin-bottom: 4px;
+}
+
+#boss-bar-bg {
+  width: 100%;
+  height: 16px;
+  background: rgba(20, 10, 20, 0.75);
+  border: 2px solid #6b2d8b;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#boss-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #8a2dbf, #ff5ee0);
+  transition: width 0.15s ease-out;
+}
+
 #health-panel {
   position: absolute;
   top: 18px;
@@ -362,6 +396,17 @@ button:hover {
 }
 
 #death-stats {
+  font-size: 15px;
+  color: #cfeadb;
+  margin-bottom: 20px;
+}
+
+.victory-title {
+  color: #ffe066 !important;
+  text-shadow: 0 0 16px rgba(255, 224, 102, 0.7) !important;
+}
+
+#victory-stats {
   font-size: 15px;
   color: #cfeadb;
   margin-bottom: 20px;

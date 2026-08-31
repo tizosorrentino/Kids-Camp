@@ -6,7 +6,9 @@
 const CONFIG = {
   playerHitDamage: 3,      // % health lost per alien attack
   shotgunDamage: 2,        // % health an alien loses per shot landed
-  alienMaxHealth: 5,       // % health pool of a single alien
+  alienMaxHealth: 5,       // % health pool of a single regular alien
+  totalLevels: 20,
+  bossHealthPerLevel: 10,  // level N boss health = N * 10% (10%, 20%, ... 200%)
   maxAmmoPerGun: 160,
   potionHeal: 25,          // % health restored per potion
   interactRange: 4.5,
@@ -393,16 +395,23 @@ const chests = CHEST_POSITIONS.map(([x, z]) => new Chest(x, z));
 /* ---------------- Aliens ---------------- */
 
 class Alien {
-  constructor() {
-    this.health = CONFIG.alienMaxHealth;
-    this.maxHealth = CONFIG.alienMaxHealth;
-    this.attackTimer = Math.random() * CONFIG.alienAttackCooldown;
+  constructor(opts = {}) {
+    const isBoss = !!opts.isBoss;
+    this.isBoss = isBoss;
+    const maxHealth = isBoss ? opts.level * CONFIG.bossHealthPerLevel : CONFIG.alienMaxHealth;
+    this.health = maxHealth;
+    this.maxHealth = maxHealth;
+    this.attackCooldownScale = isBoss ? 0.65 : 1;
+    this.attackTimer = Math.random() * CONFIG.alienAttackCooldown * this.attackCooldownScale;
     this.dead = false;
-    this.speed = 2.6 + Math.random() * 1.2;
-    this.preferredRange = 10 + Math.random() * 6;
+    this.speed = (isBoss ? 3.2 : 2.6) + Math.random() * 1.2;
+    this.preferredRange = isBoss ? 8 + Math.random() * 4 : 10 + Math.random() * 6;
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3d8b5c, emissive: 0x0e3d22, roughness: 0.4, metalness: 0.3 });
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0xff3355, emissive: 0xff2244, emissiveIntensity: 1.5 });
+    const bodyColor = isBoss ? 0x6b2d8b : 0x3d8b5c;
+    const emissiveColor = isBoss ? 0x2d0e3d : 0x0e3d22;
+    const eyeColor = isBoss ? 0xffaa22 : 0xff3355;
+    const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, emissive: emissiveColor, roughness: 0.4, metalness: 0.3 });
+    const eyeMat = new THREE.MeshStandardMaterial({ color: eyeColor, emissive: eyeColor, emissiveIntensity: 1.5 });
 
     this.group = new THREE.Group();
     const torso = makeCapsule(0.45, 1.0, bodyMat, true);
@@ -428,16 +437,17 @@ class Alien {
     this.gunMesh = gun;
 
     this.group.add(torso, head, eyeL, eyeR, armL, armR, gun);
+    if (isBoss) this.group.scale.setScalar(1.7);
 
     this.hpBarBg = makeBillboardBar(0x222222);
-    this.hpBarFill = makeBillboardBar(0xff3d3d);
+    this.hpBarFill = makeBillboardBar(isBoss ? 0xd23dff : 0xff3d3d);
     this.hpBarBg.position.y = 2.5;
     this.hpBarFill.position.y = 2.5;
     this.hpBarFill.position.z = 0.001;
     this.group.add(this.hpBarBg, this.hpBarFill);
 
     const spawnAngle = Math.random() * Math.PI * 2;
-    const spawnRadius = 55 + Math.random() * 25;
+    const spawnRadius = isBoss ? 26 + Math.random() * 10 : 55 + Math.random() * 25;
     this.group.position.set(Math.cos(spawnAngle) * spawnRadius, 0, Math.sin(spawnAngle) * spawnRadius);
 
     scene.add(this.group);
@@ -463,6 +473,10 @@ class Alien {
     scene.remove(this.group);
     state.kills++;
     updateHUD();
+    if (this.isBoss) {
+      hideBossBar();
+      onBossDefeated();
+    }
   }
 
   update(dt, playerPos) {
@@ -477,7 +491,7 @@ class Alien {
 
     this.attackTimer -= dt;
     if (dist <= CONFIG.alienAttackRange && this.attackTimer <= 0) {
-      this.attackTimer = CONFIG.alienAttackCooldown + Math.random() * 0.6;
+      this.attackTimer = CONFIG.alienAttackCooldown * this.attackCooldownScale + Math.random() * 0.6;
       this.fireAt(playerPos);
     }
 
@@ -523,7 +537,9 @@ const state = {
   health: 100,
   potions: 0,
   kills: 0,
-  wave: 1,
+  level: 1,
+  levelPhase: 'squad', // 'squad' (clearing regular aliens) -> 'boss' (checkpoint fight)
+  boss: null,
   alienIsAlive: () => aliens.some(a => !a.dead),
   running: false,
   paused: true,
@@ -722,7 +738,7 @@ function killPlayer() {
     subtitle: 'Answer correctly before you can redeploy',
     onComplete: () => {
       document.getElementById('death-stats').textContent =
-        `You survived to Wave ${state.wave} with ${state.kills} confirmed kills. ` +
+        `You made it to Level ${state.level} of ${CONFIG.totalLevels} with ${state.kills} confirmed kills. ` +
         `Brainpower: ${quizStats.correct}/${quizStats.asked}.`;
       show('death-screen');
     },
@@ -736,12 +752,14 @@ const healthText = document.getElementById('health-text');
 const weaponName = document.getElementById('weapon-name');
 const ammoText = document.getElementById('ammo-text');
 const potionCount = document.getElementById('potion-count');
-const waveNum = document.getElementById('wave-num');
+const levelNumEl = document.getElementById('level-num');
 const killNum = document.getElementById('kill-num');
 const quizScoreEl = document.getElementById('quiz-score');
 const promptEl = document.getElementById('prompt');
 const toastEl = document.getElementById('toast');
 const damageFlashEl = document.getElementById('damage-flash');
+const bossLabelEl = document.getElementById('boss-label');
+const bossBarFillEl = document.getElementById('boss-bar-fill');
 
 function updateHUD() {
   healthFill.style.width = `${state.health}%`;
@@ -750,7 +768,7 @@ function updateHUD() {
   weaponName.textContent = wpn.type.name;
   ammoText.textContent = `${wpn.ammo} / ${CONFIG.maxAmmoPerGun}`;
   potionCount.textContent = state.potions;
-  waveNum.textContent = state.wave;
+  levelNumEl.textContent = state.level;
   killNum.textContent = state.kills;
   quizScoreEl.textContent = `${quizStats.correct}/${quizStats.asked}`;
 }
@@ -904,35 +922,91 @@ quizContinueBtn.addEventListener('click', () => {
   if (cb) cb();
 });
 
-/* ---------------- Waves ---------------- */
+/* ---------------- Levels & Boss Checkpoints ---------------- */
+// 20 levels. Each level is a squad of regular aliens followed by a boss
+// checkpoint. Boss health scales 10% per level: 10%, 20%, ... 200%.
 
-let waveSpawnTimer = 0;
+let squadTimer = 0;
 
-function startWave() {
-  const count = Math.min(3 + state.wave, 12);
+function startSquad() {
+  const count = Math.min(3 + state.level, 12);
   for (let i = 0; i < count; i++) aliens.push(new Alien());
   updateHUD();
 }
 
-function checkWaveProgress(dt) {
-  waveSpawnTimer -= dt;
-  if (waveSpawnTimer > 0) return;
+function checkLevelProgress(dt) {
+  if (state.levelPhase !== 'squad') return;
+  squadTimer -= dt;
+  if (squadTimer > 0) return;
   const remaining = aliens.filter(a => !a.dead).length;
   if (remaining === 0) {
-    const clearedWave = state.wave;
-    const nextWave = clearedWave + 1;
-    showQuiz({
-      title: `WAVE ${clearedWave} CLEARED!`,
-      subtitle: `Answer correctly to deploy for Wave ${nextWave}`,
-      onComplete: () => {
-        state.wave = nextWave;
-        waveSpawnTimer = 2.5;
-        startWave();
-        flashToast(`WAVE ${state.wave} INCOMING`);
-        canvas.requestPointerLock();
-      },
-    });
+    state.levelPhase = 'boss';
+    spawnBoss();
   }
+}
+
+function spawnBoss() {
+  const boss = new Alien({ isBoss: true, level: state.level });
+  aliens.push(boss);
+  state.boss = boss;
+  bossLabelEl.textContent = `LEVEL ${state.level} BOSS`;
+  bossBarFillEl.style.width = '100%';
+  show('boss-panel');
+  flashToast(`CHECKPOINT! LEVEL ${state.level} BOSS INCOMING`);
+}
+
+function updateBossBar() {
+  if (!state.boss || state.boss.dead) return;
+  const pct = Math.max(0, (state.boss.health / state.boss.maxHealth) * 100);
+  bossBarFillEl.style.width = `${pct}%`;
+}
+
+function hideBossBar() {
+  bossBarFillEl.style.width = '0%';
+  hide('boss-panel');
+  state.boss = null;
+}
+
+function resetChests() {
+  for (const chest of chests) {
+    chest.state = 'closed';
+    chest.loot = Math.random() < 0.45 ? 'potion' : 'weapon';
+    chest.weaponType = WEAPON_TYPES[Math.floor(Math.random() * WEAPON_TYPES.length)];
+    chest.lid.rotation.x = 0;
+    chest._lidT = 0;
+  }
+}
+
+function onBossDefeated() {
+  if (state.level >= CONFIG.totalLevels) {
+    showVictory();
+    return;
+  }
+  const clearedLevel = state.level;
+  const nextLevel = clearedLevel + 1;
+  showQuiz({
+    title: `LEVEL ${clearedLevel} COMPLETE!`,
+    subtitle: `Answer correctly to deploy for Level ${nextLevel}`,
+    onComplete: () => {
+      state.level = nextLevel;
+      state.levelPhase = 'squad';
+      squadTimer = 2.5;
+      resetChests();
+      startSquad();
+      flashToast(`LEVEL ${state.level} — CHECKPOINT ${state.level}/${CONFIG.totalLevels}`);
+      canvas.requestPointerLock();
+    },
+  });
+}
+
+function showVictory() {
+  state.gameOver = true;
+  state.paused = true;
+  document.exitPointerLock();
+  document.getElementById('victory-stats').textContent =
+    `You defended the frozen north through all ${CONFIG.totalLevels} checkpoints with ${state.kills} kills ` +
+    `and a brainpower score of ${quizStats.correct}/${quizStats.asked}!`;
+  show('victory-screen');
 }
 
 /* ---------------- Movement ---------------- */
@@ -1002,6 +1076,7 @@ function animate() {
 
     const playerPos = playerRig.position;
     for (const alien of aliens) alien.update(dt, playerPos);
+    updateBossBar();
 
     for (let i = alienProjectiles.length - 1; i >= 0; i--) {
       const proj = alienProjectiles[i];
@@ -1020,7 +1095,7 @@ function animate() {
       }
     }
 
-    checkWaveProgress(dt);
+    checkLevelProgress(dt);
   }
 
   renderer.render(scene, camera);
@@ -1033,7 +1108,7 @@ document.getElementById('start-btn').addEventListener('click', () => {
   hide('start-screen');
   state.running = true;
   canvas.requestPointerLock();
-  if (aliens.length === 0) startWave();
+  if (aliens.length === 0) startSquad();
   updateHUD();
 });
 
@@ -1042,5 +1117,9 @@ document.getElementById('pause-screen').addEventListener('click', () => {
 });
 
 document.getElementById('restart-btn').addEventListener('click', () => {
+  window.location.reload();
+});
+
+document.getElementById('victory-restart-btn').addEventListener('click', () => {
   window.location.reload();
 });
