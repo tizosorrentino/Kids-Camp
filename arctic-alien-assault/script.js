@@ -7,6 +7,8 @@ const CONFIG = {
   playerHitDamage: 3,      // % health lost per alien attack
   shotgunDamage: 2,        // % health an alien loses per shot landed
   alienMaxHealth: 5,       // % health pool of a single regular alien
+  armoredAlienMaxHealth: 10, // % health pool of an armored alien (double a regular one)
+  armoredChance: 0.35,     // fraction of each squad that spawns armored
   totalLevels: 20,
   bossHealthPerLevel: 10,  // level N boss health = N * 10% (10%, 20%, ... 200%)
   maxAmmoPerGun: 160,
@@ -470,14 +472,18 @@ const chests = CHEST_POSITIONS.map(([x, z]) => new Chest(x, z));
 class Alien {
   constructor(opts = {}) {
     const isBoss = !!opts.isBoss;
+    const isArmored = !isBoss && !!opts.isArmored;
     this.isBoss = isBoss;
-    const maxHealth = isBoss ? opts.level * CONFIG.bossHealthPerLevel : CONFIG.alienMaxHealth;
+    this.isArmored = isArmored;
+    const maxHealth = isBoss
+      ? opts.level * CONFIG.bossHealthPerLevel
+      : (isArmored ? CONFIG.armoredAlienMaxHealth : CONFIG.alienMaxHealth);
     this.health = maxHealth;
     this.maxHealth = maxHealth;
     this.attackCooldownScale = isBoss ? 0.65 : 1;
     this.attackTimer = Math.random() * CONFIG.alienAttackCooldown * this.attackCooldownScale;
     this.dead = false;
-    this.speed = (isBoss ? 3.2 : 2.6) + Math.random() * 1.2;
+    this.speed = ((isBoss ? 3.2 : 2.6) + Math.random() * 1.2) * (isArmored ? 0.85 : 1);
     this.preferredRange = isBoss ? 8 + Math.random() * 4 : 10 + Math.random() * 6;
 
     const bodyColor = isBoss ? 0x6b2d8b : 0x3d8b5c;
@@ -485,23 +491,47 @@ class Alien {
     const eyeColor = isBoss ? 0xffaa22 : 0xff3355;
     const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, emissive: emissiveColor, roughness: 0.4, metalness: 0.3 });
     const eyeMat = new THREE.MeshStandardMaterial({ color: eyeColor, emissive: eyeColor, emissiveIntensity: 1.5 });
+    const clawMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.4, metalness: 0.5 });
+    const coreColor = isBoss ? 0xffaa22 : 0x7dffb3;
+    const coreMat = new THREE.MeshStandardMaterial({ color: coreColor, emissive: coreColor, emissiveIntensity: 2 });
+    const armorMat = new THREE.MeshStandardMaterial({ color: 0x5a6473, roughness: 0.35, metalness: 0.8 });
 
     this.group = new THREE.Group();
     const torso = makeCapsule(0.45, 1.0, bodyMat, true);
     torso.position.y = 1.1;
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), bodyMat);
     head.position.y = 1.9;
+    head.scale.set(0.85, 1.05, 1.1); // slightly elongated cranium
     head.castShadow = true;
     const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), eyeMat);
-    eyeL.position.set(-0.13, 1.95, 0.28);
+    eyeL.position.set(-0.13, 1.95, 0.29);
     const eyeR = eyeL.clone();
     eyeR.position.x = 0.13;
+
+    const antennaGeo = new THREE.CylinderGeometry(0.02, 0.008, 0.4, 5);
+    const antennaL = new THREE.Mesh(antennaGeo, bodyMat);
+    antennaL.position.set(-0.12, 2.2, -0.06);
+    antennaL.rotation.set(-0.55, 0, 0.3);
+    const antennaR = antennaL.clone();
+    antennaR.position.x = 0.12;
+    antennaR.rotation.z = -0.3;
+
     const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), bodyMat);
     armL.position.set(-0.55, 1.15, 0);
     armL.rotation.z = 0.3;
     const armR = armL.clone();
     armR.position.x = 0.55;
     armR.rotation.z = -0.3;
+
+    const clawL = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.22, 5), clawMat);
+    clawL.position.set(-0.45, 0.72, 0);
+    clawL.rotation.z = Math.PI;
+    const clawR = clawL.clone();
+    clawR.position.x = 0.45;
+
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), coreMat);
+    core.position.set(0, 1.15, 0.42);
+
     const gun = new THREE.Mesh(
       new THREE.BoxGeometry(0.12, 0.12, 0.5),
       new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5, metalness: 0.6 })
@@ -509,11 +539,31 @@ class Alien {
     gun.position.set(0.75, 1.05, 0.15);
     this.gunMesh = gun;
 
-    this.group.add(torso, head, eyeL, eyeR, armL, armR, gun);
+    this.group.add(torso, head, eyeL, eyeR, antennaL, antennaR, armL, armR, clawL, clawR, core, gun);
+
+    if (isArmored) {
+      const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.55, 0.26), armorMat);
+      chestPlate.position.set(0, 1.25, 0.26);
+      chestPlate.castShadow = true;
+      const shoulderL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 0.32), armorMat);
+      shoulderL.position.set(-0.56, 1.55, 0);
+      shoulderL.castShadow = true;
+      const shoulderR = shoulderL.clone();
+      shoulderR.position.x = 0.56;
+      const helmet = new THREE.Mesh(
+        new THREE.SphereGeometry(0.4, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6),
+        armorMat
+      );
+      helmet.position.y = 1.98;
+      helmet.castShadow = true;
+      this.group.add(chestPlate, shoulderL, shoulderR, helmet);
+    }
+
     if (isBoss) this.group.scale.setScalar(1.7);
+    else if (isArmored) this.group.scale.setScalar(1.15);
 
     this.hpBarBg = makeBillboardBar(0x222222);
-    this.hpBarFill = makeBillboardBar(isBoss ? 0xd23dff : 0xff3d3d);
+    this.hpBarFill = makeBillboardBar(isBoss ? 0xd23dff : (isArmored ? 0xffa33d : 0xff3d3d));
     this.hpBarBg.position.y = 2.5;
     this.hpBarFill.position.y = 2.5;
     this.hpBarFill.position.z = 0.001;
@@ -1019,7 +1069,10 @@ let squadTimer = 0;
 
 function startSquad() {
   const count = Math.min(3 + state.level, 12);
-  for (let i = 0; i < count; i++) aliens.push(new Alien());
+  for (let i = 0; i < count; i++) {
+    const isArmored = Math.random() < CONFIG.armoredChance;
+    aliens.push(new Alien({ isArmored }));
+  }
   updateHUD();
 }
 
