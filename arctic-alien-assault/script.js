@@ -488,9 +488,8 @@ class Alien {
 
     const bodyColor = isBoss ? 0x6b2d8b : 0x3d8b5c;
     const emissiveColor = isBoss ? 0x2d0e3d : 0x0e3d22;
-    const eyeColor = isBoss ? 0xffaa22 : 0xff3355;
     const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, emissive: emissiveColor, roughness: 0.4, metalness: 0.3 });
-    const eyeMat = new THREE.MeshStandardMaterial({ color: eyeColor, emissive: eyeColor, emissiveIntensity: 1.5 });
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.15, metalness: 0.1 });
     const clawMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.4, metalness: 0.5 });
     const coreColor = isBoss ? 0xffaa22 : 0x7dffb3;
     const coreMat = new THREE.MeshStandardMaterial({ color: coreColor, emissive: coreColor, emissiveIntensity: 2 });
@@ -499,21 +498,46 @@ class Alien {
     this.group = new THREE.Group();
     const torso = makeCapsule(0.45, 1.0, bodyMat, true);
     torso.position.y = 1.1;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), bodyMat);
-    head.position.y = 1.9;
-    head.scale.set(0.85, 1.05, 1.1); // slightly elongated cranium
-    head.castShadow = true;
-    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), eyeMat);
-    eyeL.position.set(-0.13, 1.95, 0.29);
-    const eyeR = eyeL.clone();
-    eyeR.position.x = 0.13;
 
-    const antennaGeo = new THREE.CylinderGeometry(0.02, 0.008, 0.4, 5);
+    // long visible neck connecting the torso to a large bulbous head
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.17, 0.4, 8), bodyMat);
+    neck.position.y = 2.25;
+    neck.castShadow = true;
+
+    const headY = 2.78;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 14, 12), bodyMat);
+    head.position.y = headY;
+    head.scale.set(1.2, 1.05, 1.0); // large bulbous cranium
+    head.castShadow = true;
+
+    // large solid-black almond eyes
+    const eyeGeo = new THREE.SphereGeometry(0.15, 10, 8);
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(-0.18, headY - 0.03, 0.33);
+    eyeL.scale.set(1.5, 0.85, 0.7);
+    eyeL.rotation.y = 0.35;
+    const eyeR = eyeL.clone();
+    eyeR.position.x = 0.18;
+    eyeR.rotation.y = -0.35;
+
+    // visible outer ears
+    const earGeo = new THREE.ConeGeometry(0.1, 0.24, 4);
+    const earL = new THREE.Mesh(earGeo, bodyMat);
+    earL.position.set(-0.44, headY, 0.02);
+    earL.scale.set(0.35, 1, 0.7);
+    earL.rotation.z = -0.45;
+    earL.rotation.x = 0.15;
+    earL.castShadow = true;
+    const earR = earL.clone();
+    earR.position.x = 0.44;
+    earR.rotation.z = 0.45;
+
+    const antennaGeo = new THREE.CylinderGeometry(0.02, 0.008, 0.35, 5);
     const antennaL = new THREE.Mesh(antennaGeo, bodyMat);
-    antennaL.position.set(-0.12, 2.2, -0.06);
-    antennaL.rotation.set(-0.55, 0, 0.3);
+    antennaL.position.set(-0.13, headY + 0.34, -0.05);
+    antennaL.rotation.set(-0.5, 0, 0.3);
     const antennaR = antennaL.clone();
-    antennaR.position.x = 0.12;
+    antennaR.position.x = 0.13;
     antennaR.rotation.z = -0.3;
 
     const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.9, 6), bodyMat);
@@ -539,7 +563,7 @@ class Alien {
     gun.position.set(0.75, 1.05, 0.15);
     this.gunMesh = gun;
 
-    this.group.add(torso, head, eyeL, eyeR, antennaL, antennaR, armL, armR, clawL, clawR, core, gun);
+    this.group.add(torso, neck, head, eyeL, eyeR, earL, earR, antennaL, antennaR, armL, armR, clawL, clawR, core, gun);
 
     if (isArmored) {
       const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.55, 0.26), armorMat);
@@ -551,10 +575,10 @@ class Alien {
       const shoulderR = shoulderL.clone();
       shoulderR.position.x = 0.56;
       const helmet = new THREE.Mesh(
-        new THREE.SphereGeometry(0.4, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6),
+        new THREE.SphereGeometry(0.46, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6),
         armorMat
       );
-      helmet.position.y = 1.98;
+      helmet.position.y = headY;
       helmet.castShadow = true;
       this.group.add(chestPlate, shoulderL, shoulderR, helmet);
     }
@@ -564,8 +588,8 @@ class Alien {
 
     this.hpBarBg = makeBillboardBar(0x222222);
     this.hpBarFill = makeBillboardBar(isBoss ? 0xd23dff : (isArmored ? 0xffa33d : 0xff3d3d));
-    this.hpBarBg.position.y = 2.5;
-    this.hpBarFill.position.y = 2.5;
+    this.hpBarBg.position.y = 3.6;
+    this.hpBarFill.position.y = 3.6;
     this.hpBarFill.position.z = 0.001;
     this.group.add(this.hpBarBg, this.hpBarFill);
 
