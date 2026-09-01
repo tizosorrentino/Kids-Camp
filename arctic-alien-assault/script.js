@@ -353,9 +353,9 @@ function addFirewoodPile(x, z, rotY) {
 
 function addCabin(x, z, rotY) {
   const group = new THREE.Group();
-  const width = 4.2, depth = 3.6, wallHeight = 2.4;
-  const wallThickness = 0.25;
-  const doorWidth = 1.8, doorHeight = 1.9, doorHalfWidth = doorWidth / 2;
+  const width = 6.6, depth = 5.6, wallHeight = 3.4;
+  const wallThickness = 0.3;
+  const doorWidth = 2.2, doorHeight = 2.3, doorHalfWidth = doorWidth / 2;
 
   const addWallBox = (w, h, d, px, py, pz) => {
     const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), logWallMat);
@@ -380,24 +380,24 @@ function addCabin(x, z, rotY) {
   }
 
   // stacked log-ends poking out at the corners, the classic log-cabin joint look
-  const logEndGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.55, 8);
+  const logEndGeo = new THREE.CylinderGeometry(0.19, 0.19, 0.65, 8);
   for (const xSign of [-1, 1]) {
     for (const zSide of [-depth / 2, depth / 2]) {
-      for (let level = 0; level < 4; level++) {
+      for (let level = 0; level < 6; level++) {
         const logEnd = new THREE.Mesh(logEndGeo, [barkMat, woodRingMat, woodRingMat]);
         logEnd.rotation.z = Math.PI / 2;
-        logEnd.position.set(xSign * (width / 2 + 0.05), 0.35 + level * 0.5, zSide);
+        logEnd.position.set(xSign * (width / 2 + 0.06), 0.4 + level * 0.55, zSide);
         group.add(logEnd);
       }
     }
   }
 
   // pitched, snow-capped roof
-  const rise = 1.2;
-  const halfDepth = depth / 2 + 0.35;
+  const rise = 1.7;
+  const halfDepth = depth / 2 + 0.45;
   const slopeLen = Math.sqrt(halfDepth * halfDepth + rise * rise);
   const roofAngle = Math.atan2(rise, halfDepth);
-  const roofGeo = new THREE.BoxGeometry(width + 0.6, 0.15, slopeLen);
+  const roofGeo = new THREE.BoxGeometry(width + 0.8, 0.18, slopeLen);
   const roofMat = new THREE.MeshStandardMaterial({ color: 0xeef4fa, roughness: 0.85 });
 
   const roofA = new THREE.Mesh(roofGeo, roofMat);
@@ -413,18 +413,18 @@ function addCabin(x, z, rotY) {
   group.add(roofB);
 
   const chimney = new THREE.Mesh(
-    new THREE.BoxGeometry(0.4, 0.9, 0.4),
+    new THREE.BoxGeometry(0.55, 1.2, 0.55),
     new THREE.MeshStandardMaterial({ color: 0x5a5450, roughness: 1 })
   );
-  chimney.position.set(width / 4, wallHeight + rise + 0.2, -halfDepth / 4);
+  chimney.position.set(width / 4, wallHeight + rise + 0.3, -halfDepth / 4);
   chimney.castShadow = true;
   group.add(chimney);
 
   const windowMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.6, 0.6, 0.06),
+    new THREE.BoxGeometry(0.85, 0.85, 0.08),
     new THREE.MeshStandardMaterial({ color: 0xffdd88, emissive: 0xffaa33, emissiveIntensity: 1.2, roughness: 0.4 })
   );
-  windowMesh.position.set(width / 2 + 0.03, 1.5, 0);
+  windowMesh.position.set(width / 2 + 0.04, 1.9, 0);
   windowMesh.rotation.y = Math.PI / 2;
   group.add(windowMesh);
 
