@@ -85,6 +85,7 @@ const SFX = (() => {
     alienDie: () => beep({ freq: 300, duration: 0.25, type: 'sawtooth', gain: 0.15, slide: -250 }),
     playerHurt: () => beep({ freq: 140, duration: 0.18, type: 'sawtooth', gain: 0.2, slide: -80 }),
     chestOpen: () => beep({ freq: 220, duration: 0.2, type: 'triangle', gain: 0.15, slide: 100 }),
+    chestClose: () => beep({ freq: 320, duration: 0.18, type: 'triangle', gain: 0.13, slide: -140 }),
     pickup: () => beep({ freq: 500, duration: 0.15, type: 'sine', gain: 0.15, slide: 300 }),
     drink: () => beep({ freq: 350, duration: 0.25, type: 'sine', gain: 0.15, slide: 150 }),
     death: () => beep({ freq: 220, duration: 0.9, type: 'sawtooth', gain: 0.2, slide: -180 }),
@@ -685,9 +686,11 @@ const CHEST_POSITIONS = [
 
 class Chest {
   constructor(x, z) {
-    this.state = 'closed'; // closed -> open -> looted
+    this.state = 'closed'; // closed -> open -> looted -> (5s after opening) closed, with new loot
     this.loot = Math.random() < 0.45 ? 'potion' : 'weapon';
     this.weaponType = WEAPON_TYPES[Math.floor(Math.random() * WEAPON_TYPES.length)];
+    this.closeTimer = null;
+    this._lidT = 0; // 0 = fully shut, 1 = fully open
 
     this.group = new THREE.Group();
     this.group.position.set(x, 0, z);
@@ -719,16 +722,31 @@ class Chest {
 
   open() {
     this.state = 'open';
-    this._lidT = 0;
+    this.closeTimer = 5;
     SFX.chestOpen();
   }
 
+  reroll() {
+    this.state = 'closed';
+    this.closeTimer = null;
+    this.loot = Math.random() < 0.45 ? 'potion' : 'weapon';
+    this.weaponType = WEAPON_TYPES[Math.floor(Math.random() * WEAPON_TYPES.length)];
+    SFX.chestClose();
+  }
+
   update(dt) {
-    if (this.state === 'open' && this._lidT < 1) {
-      this._lidT = Math.min(1, this._lidT + dt * 2.2);
-      this.lid.rotation.x = -this._lidT * (Math.PI / 1.6);
+    const shouldBeOpen = this.state === 'open' || this.state === 'looted';
+    const target = shouldBeOpen ? 1 : 0;
+    if (this._lidT < target) this._lidT = Math.min(target, this._lidT + dt * 2.2);
+    else if (this._lidT > target) this._lidT = Math.max(target, this._lidT - dt * 2.2);
+    this.lid.rotation.x = -this._lidT * (Math.PI / 1.6);
+
+    if (shouldBeOpen && this.closeTimer !== null) {
+      this.closeTimer -= dt;
+      if (this.closeTimer <= 0) this.reroll();
     }
-    this.glow.intensity = this.state === 'open' ? 0 : 0.6 + Math.sin(performance.now() * 0.003) * 0.3;
+
+    this.glow.intensity = this.state === 'closed' ? 0.6 + Math.sin(performance.now() * 0.003) * 0.3 : 0;
   }
 }
 
@@ -1406,6 +1424,7 @@ function resetChests() {
     chest.state = 'closed';
     chest.loot = Math.random() < 0.45 ? 'potion' : 'weapon';
     chest.weaponType = WEAPON_TYPES[Math.floor(Math.random() * WEAPON_TYPES.length)];
+    chest.closeTimer = null;
     chest.lid.rotation.x = 0;
     chest._lidT = 0;
   }
