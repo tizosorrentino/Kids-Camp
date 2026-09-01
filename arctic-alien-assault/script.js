@@ -54,7 +54,31 @@ const SFX = (() => {
       osc.stop(c.currentTime + duration);
     } catch (e) { /* audio unavailable, ignore */ }
   }
+  function crunch() {
+    try {
+      const c = ac();
+      const duration = 0.09;
+      const bufferSize = Math.max(1, Math.floor(c.sampleRate * duration));
+      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+      }
+      const noise = c.createBufferSource();
+      noise.buffer = buffer;
+      const filter = c.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1100 + Math.random() * 900;
+      filter.Q.value = 0.7;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.16, c.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+      noise.connect(filter).connect(g).connect(c.destination);
+      noise.start();
+    } catch (e) { /* audio unavailable, ignore */ }
+  }
   return {
+    footstep: crunch,
     shoot: () => beep({ freq: 180, duration: 0.09, type: 'square', gain: 0.18, slide: -60 }),
     empty: () => beep({ freq: 120, duration: 0.05, type: 'square', gain: 0.08 }),
     alienHit: () => beep({ freq: 500, duration: 0.06, type: 'triangle', gain: 0.12, slide: 200 }),
@@ -174,11 +198,92 @@ buildGround();
 
 const obstacles = []; // {position, radius} for simple collision
 
+/* ---------------- Wood Textures (bark lines, end-grain rings) ---------------- */
+
+function barkTexture() {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 64;
+  const ctx2d = c.getContext('2d');
+  ctx2d.fillStyle = '#3b2a20';
+  ctx2d.fillRect(0, 0, 32, 64);
+  ctx2d.strokeStyle = '#241a13';
+  for (let i = 0; i < 9; i++) {
+    const x = (i / 9) * 32 + Math.random() * 2;
+    ctx2d.lineWidth = 1 + Math.random();
+    ctx2d.beginPath();
+    ctx2d.moveTo(x, 0);
+    for (let y = 0; y <= 64; y += 8) ctx2d.lineTo(x + (Math.random() - 0.5) * 4, y);
+    ctx2d.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function woodRingTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx2d = c.getContext('2d');
+  ctx2d.fillStyle = '#c9a26b';
+  ctx2d.fillRect(0, 0, 64, 64);
+  const cx = 32, cy = 32;
+  ctx2d.strokeStyle = '#8a6234';
+  for (let r = 4; r < 30; r += 3.2) {
+    ctx2d.lineWidth = 1 + Math.random() * 0.8;
+    ctx2d.beginPath();
+    // slightly irregular, spiral-leaning rings for a hand-cut look
+    ctx2d.arc(cx + Math.sin(r) * 1.5, cy + Math.cos(r) * 1.5, r, 0, Math.PI * 2);
+    ctx2d.stroke();
+  }
+  ctx2d.fillStyle = '#6b4423';
+  ctx2d.beginPath();
+  ctx2d.arc(cx, cy, 2.2, 0, Math.PI * 2);
+  ctx2d.fill();
+  return new THREE.CanvasTexture(c);
+}
+
+function logWallTexture() {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const ctx2d = c.getContext('2d');
+  const courseH = 128 / 6;
+  for (let row = 0; row < 6; row++) {
+    const y = row * courseH;
+    ctx2d.fillStyle = row % 2 === 0 ? '#75512f' : '#6b4a30';
+    ctx2d.fillRect(0, y, 128, courseH);
+    ctx2d.strokeStyle = '#3f2a19';
+    ctx2d.lineWidth = 2;
+    ctx2d.beginPath();
+    ctx2d.moveTo(0, y + courseH - 1);
+    ctx2d.lineTo(128, y + courseH - 1);
+    ctx2d.stroke();
+    ctx2d.strokeStyle = 'rgba(40,25,15,0.35)';
+    ctx2d.lineWidth = 1;
+    for (let i = 0; i < 6; i++) {
+      const gy = y + 2 + Math.random() * (courseH - 4);
+      ctx2d.beginPath();
+      ctx2d.moveTo(0, gy);
+      for (let x = 0; x <= 128; x += 16) ctx2d.lineTo(x, gy + (Math.random() - 0.5) * 3);
+      ctx2d.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 1);
+  return tex;
+}
+
+const barkMat = new THREE.MeshStandardMaterial({ map: barkTexture(), roughness: 1 });
+const woodRingMat = new THREE.MeshStandardMaterial({ map: woodRingTexture(), roughness: 0.9 });
+const logWallMat = new THREE.MeshStandardMaterial({ map: logWallTexture(), roughness: 0.95 });
+
 function addTree(x, z) {
   const group = new THREE.Group();
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.18, 0.28, 1.6, 6),
-    new THREE.MeshStandardMaterial({ color: 0x3b2a20, roughness: 1 })
+    [barkMat, woodRingMat, woodRingMat]
   );
   trunk.position.y = 0.8;
   const foliageMat = new THREE.MeshStandardMaterial({ color: 0x1c3b2e, roughness: 0.9 });
@@ -204,18 +309,157 @@ function addTree(x, z) {
   obstacles.push({ x, z, radius: 0.9 });
 }
 
+const rockSnowMat = new THREE.MeshStandardMaterial({ color: 0xf4f9ff, roughness: 0.85, flatShading: true });
+
 function addRock(x, z, scale) {
+  const group = new THREE.Group();
   const rock = new THREE.Mesh(
     new THREE.IcosahedronGeometry(scale, 0),
     new THREE.MeshStandardMaterial({ color: 0x8b95a0, roughness: 1, flatShading: true })
   );
-  rock.position.set(x, scale * 0.4, z);
   rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
   rock.castShadow = true;
   rock.receiveShadow = true;
-  scene.add(rock);
+  group.add(rock);
+
+  // snow drift on top -- kept unrotated so it always sits facing world-up
+  const snowCap = new THREE.Mesh(new THREE.IcosahedronGeometry(scale * 0.65, 0), rockSnowMat);
+  snowCap.position.y = scale * 0.5;
+  snowCap.scale.set(1, 0.55, 1);
+  snowCap.castShadow = true;
+  group.add(snowCap);
+
+  group.position.set(x, scale * 0.4, z);
+  scene.add(group);
   obstacles.push({ x, z, radius: scale * 0.9 });
 }
+
+function addFirewoodPile(x, z, rotY) {
+  const group = new THREE.Group();
+  const logGeo = new THREE.CylinderGeometry(0.16, 0.16, 1.1, 8);
+  const rows = [[0, 0.16], [-0.17, 0.48], [0.17, 0.48], [0, 0.8]];
+  for (const [ox, oy] of rows) {
+    const log = new THREE.Mesh(logGeo, [barkMat, woodRingMat, woodRingMat]);
+    log.rotation.z = Math.PI / 2;
+    log.position.set(ox, oy, 0);
+    log.castShadow = true;
+    group.add(log);
+  }
+  group.position.set(x, 0, z);
+  group.rotation.y = rotY;
+  scene.add(group);
+}
+
+function addCabin(x, z, rotY) {
+  const group = new THREE.Group();
+  const width = 4.2, depth = 3.6, wallHeight = 2.4;
+  const wallThickness = 0.25;
+  const doorWidth = 1.8, doorHeight = 1.9, doorHalfWidth = doorWidth / 2;
+
+  const addWallBox = (w, h, d, px, py, pz) => {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), logWallMat);
+    box.position.set(px, py, pz);
+    box.castShadow = true;
+    box.receiveShadow = true;
+    group.add(box);
+  };
+
+  // back + side walls, solid
+  addWallBox(width, wallHeight, wallThickness, 0, wallHeight / 2, -depth / 2 + wallThickness / 2);
+  addWallBox(wallThickness, wallHeight, depth, -width / 2 + wallThickness / 2, wallHeight / 2, 0);
+  addWallBox(wallThickness, wallHeight, depth, width / 2 - wallThickness / 2, wallHeight / 2, 0);
+
+  // front wall: two segments flanking a real doorway, plus a lintel above it
+  const frontSegW = (width - doorWidth) / 2;
+  addWallBox(frontSegW, wallHeight, wallThickness, -(doorHalfWidth + frontSegW / 2), wallHeight / 2, depth / 2 - wallThickness / 2);
+  addWallBox(frontSegW, wallHeight, wallThickness, doorHalfWidth + frontSegW / 2, wallHeight / 2, depth / 2 - wallThickness / 2);
+  const lintelH = wallHeight - doorHeight;
+  if (lintelH > 0.05) {
+    addWallBox(doorWidth, lintelH, wallThickness, 0, doorHeight + lintelH / 2, depth / 2 - wallThickness / 2);
+  }
+
+  // stacked log-ends poking out at the corners, the classic log-cabin joint look
+  const logEndGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.55, 8);
+  for (const xSign of [-1, 1]) {
+    for (const zSide of [-depth / 2, depth / 2]) {
+      for (let level = 0; level < 4; level++) {
+        const logEnd = new THREE.Mesh(logEndGeo, [barkMat, woodRingMat, woodRingMat]);
+        logEnd.rotation.z = Math.PI / 2;
+        logEnd.position.set(xSign * (width / 2 + 0.05), 0.35 + level * 0.5, zSide);
+        group.add(logEnd);
+      }
+    }
+  }
+
+  // pitched, snow-capped roof
+  const rise = 1.2;
+  const halfDepth = depth / 2 + 0.35;
+  const slopeLen = Math.sqrt(halfDepth * halfDepth + rise * rise);
+  const roofAngle = Math.atan2(rise, halfDepth);
+  const roofGeo = new THREE.BoxGeometry(width + 0.6, 0.15, slopeLen);
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0xeef4fa, roughness: 0.85 });
+
+  const roofA = new THREE.Mesh(roofGeo, roofMat);
+  roofA.rotation.x = roofAngle;
+  roofA.position.set(0, wallHeight + rise / 2, halfDepth / 2);
+  roofA.castShadow = true;
+  group.add(roofA);
+
+  const roofB = new THREE.Mesh(roofGeo, roofMat);
+  roofB.rotation.x = -roofAngle;
+  roofB.position.set(0, wallHeight + rise / 2, -halfDepth / 2);
+  roofB.castShadow = true;
+  group.add(roofB);
+
+  const chimney = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.9, 0.4),
+    new THREE.MeshStandardMaterial({ color: 0x5a5450, roughness: 1 })
+  );
+  chimney.position.set(width / 4, wallHeight + rise + 0.2, -halfDepth / 4);
+  chimney.castShadow = true;
+  group.add(chimney);
+
+  const windowMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.6, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xffdd88, emissive: 0xffaa33, emissiveIntensity: 1.2, roughness: 0.4 })
+  );
+  windowMesh.position.set(width / 2 + 0.03, 1.5, 0);
+  windowMesh.rotation.y = Math.PI / 2;
+  group.add(windowMesh);
+
+  group.position.set(x, 0, z);
+  group.rotation.y = rotY;
+  scene.add(group);
+  addCabinWalls(x, z, rotY, width, depth, doorHalfWidth);
+
+  const woodX = x + Math.sin(rotY) * (depth / 2 + 1.2);
+  const woodZ = z + Math.cos(rotY) * (depth / 2 + 1.2);
+  addFirewoodPile(woodX, woodZ, rotY);
+}
+
+// Blocks the walls with a chain of small circles, leaving the door gap clear
+// so the player collides with the cabin but can walk in the doorway. Circles
+// use a small radius so their reach (radius + the player's 0.6 buffer) can't
+// overreach back into the gap, matching the real opening in the wall mesh.
+function addCabinWalls(x, z, rotY, width, depth, doorHalfWidth) {
+  const cos = Math.cos(rotY), sin = Math.sin(rotY);
+  const r = 0.15;
+  const push = (lx, lz) => {
+    obstacles.push({ x: x + lx * cos + lz * sin, z: z + (-lx * sin + lz * cos), radius: r });
+  };
+  const step = 0.5;
+  for (let lx = -width / 2 + r; lx <= width / 2 - r; lx += step) push(lx, -depth / 2);
+  for (let lx = doorHalfWidth; lx <= width / 2 - r; lx += step) push(lx, depth / 2);
+  for (let lx = -doorHalfWidth; lx >= -(width / 2 - r); lx -= step) push(lx, depth / 2);
+  for (let lz = -depth / 2 + r; lz <= depth / 2 - r; lz += step) {
+    push(-width / 2, lz);
+    push(width / 2, lz);
+  }
+}
+
+const CABIN_POSITIONS = [
+  [58, 52, 0.3], [-62, 38, -0.5], [48, -58, 1.1], [-52, -48, 2.4], [4, 72, 0.8],
+];
 
 const mountains = []; // {x, z, radius, height, centerY} -- also used as climbable terrain
 
@@ -233,6 +477,7 @@ function scatterEnvironment() {
     if (Math.hypot(x, z) < 8) continue;
     addRock(x, z, 0.6 + Math.random() * 1.1);
   }
+  for (const [cx, cz, rotY] of CABIN_POSITIONS) addCabin(cx, cz, rotY);
   // climbable mountains ringing the battlefield
   const mountainMat = new THREE.MeshStandardMaterial({ color: 0x3d4f63, roughness: 1, flatShading: true });
   for (let i = 0; i < 18; i++) {
@@ -738,6 +983,7 @@ setGunVisual(activeWeapon().type.color);
 
 const keys = {};
 let fireCooldownLeft = 0;
+let footstepTimer = 0;
 let yaw = 0, pitch = 0;
 
 document.addEventListener('keydown', (e) => {
@@ -1242,6 +1488,17 @@ function updateMovement(dt) {
   const t = performance.now() * 0.012;
   weaponGroup.position.y = -0.32 + (moving ? Math.sin(t) * 0.015 : 0);
   weaponGroup.position.x = 0.32 + (moving ? Math.cos(t * 0.5) * 0.01 : 0);
+
+  // crunching snow footsteps
+  if (moving) {
+    footstepTimer -= dt;
+    if (footstepTimer <= 0) {
+      SFX.footstep();
+      footstepTimer = sprint ? 0.28 : 0.42;
+    }
+  } else {
+    footstepTimer = 0;
+  }
 }
 
 /* ---------------- Main Loop ---------------- */
