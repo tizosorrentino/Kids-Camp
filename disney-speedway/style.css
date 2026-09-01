@@ -518,6 +518,15 @@ body {
   color: #4a2f00;
 }
 
+.ctrl-button.drift {
+  background: #6a3fb0;
+}
+
+.ctrl-button.drift:active,
+.ctrl-button.drift.active {
+  background: #ff5ad1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fx-burst, #countdown-number {
     animation-duration: 1ms;

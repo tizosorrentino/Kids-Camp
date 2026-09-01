@@ -44,6 +44,15 @@ const RAIL_X = 1.9;                  // |x| beyond this hits the guard rail
 const CAR_COLLIDE_Z = 260;
 const CAR_COLLIDE_X = 0.55;
 
+const DRIFT_MIN_SPEED_FACTOR = 0.35; // must be going at least this fast (% of max) to drift
+const DRIFT_STEER_MULT = 1.6;        // turn tighter while drifting
+const DRIFT_CENTRIFUGAL_MULT = 0.5;  // and slide out less
+const DRIFT_TIERS = [
+  { time: 0.6, boost: 1800, color: '#4da6ff', label: 'Mini Boost!' },
+  { time: 1.3, boost: 3200, color: '#ff9a3c', label: 'Super Boost!' },
+  { time: 2.0, boost: 4800, color: '#ff5ad1', label: 'Mega Boost!' }
+];
+
 const COLORS = {
   sky1: '#1a1350',
   sky2: '#3a2472',
@@ -123,6 +132,7 @@ const btnRight = document.getElementById('btn-right');
 const btnAccel = document.getElementById('btn-accel');
 const btnBrake = document.getElementById('btn-brake');
 const btnBoost = document.getElementById('btn-boost');
+const btnDrift = document.getElementById('btn-drift');
 
 /* ---------------------------------------------------------------------
    Small helpers
@@ -277,7 +287,7 @@ function project(p, cameraX, cameraZ, width, height, roadWidth) {
    Race state
    --------------------------------------------------------------------- */
 
-const keys = { left: false, right: false, accel: false, brake: false, boost: false };
+const keys = { left: false, right: false, accel: false, brake: false, boost: false, drift: false };
 
 const state = {
   screen: 'menu',          // menu | countdown | racing | paused | results
@@ -329,7 +339,10 @@ function makeCar(character, isPlayer, laneIndex, totalCars) {
     aiWeave: Math.random() * Math.PI * 2,
     lapStart: 0,
     bestLapMs: null,
-    consumedPads: new Set()
+    consumedPads: new Set(),
+    isDrifting: false,
+    driftDir: 0,
+    driftCharge: 0
   };
 }
 
@@ -375,10 +388,11 @@ function setKey(name, value, evt) {
 window.addEventListener('keydown', (evt) => {
   switch (evt.key) {
     case 'ArrowLeft': case 'a': case 'A': setKey('left', true, evt); break;
-    case 'ArrowRight': case 'd': case 'D': setKey('right', true, evt); break;
+    case 'ArrowRight': setKey('right', true, evt); break;
     case 'ArrowUp': case 'w': case 'W': setKey('accel', true, evt); break;
     case 'ArrowDown': case 's': case 'S': setKey('brake', true, evt); break;
     case ' ': setKey('boost', true, evt); break;
+    case 'd': case 'D': setKey('drift', true, evt); break;
     case 'p': case 'P': togglePause(); break;
     default: return;
   }
@@ -387,10 +401,11 @@ window.addEventListener('keydown', (evt) => {
 window.addEventListener('keyup', (evt) => {
   switch (evt.key) {
     case 'ArrowLeft': case 'a': case 'A': setKey('left', false); break;
-    case 'ArrowRight': case 'd': case 'D': setKey('right', false); break;
+    case 'ArrowRight': setKey('right', false); break;
     case 'ArrowUp': case 'w': case 'W': setKey('accel', false); break;
     case 'ArrowDown': case 's': case 'S': setKey('brake', false); break;
     case ' ': setKey('boost', false); break;
+    case 'd': case 'D': setKey('drift', false); break;
     default: return;
   }
 });
@@ -410,16 +425,39 @@ bindTouchButton(btnRight, 'right');
 bindTouchButton(btnAccel, 'accel');
 bindTouchButton(btnBrake, 'brake');
 bindTouchButton(btnBoost, 'boost');
+bindTouchButton(btnDrift, 'drift');
 
 /* ---------------------------------------------------------------------
    Physics update
    --------------------------------------------------------------------- */
+
+function driftTierFor(charge) {
+  let tier = 0;
+  for (let i = 0; i < DRIFT_TIERS.length; i++) {
+    if (charge >= DRIFT_TIERS[i].time) tier = i + 1;
+  }
+  return tier;
+}
+
+function releaseDrift(car) {
+  const tier = driftTierFor(car.driftCharge);
+  if (tier > 0) {
+    const info = DRIFT_TIERS[tier - 1];
+    car.speed = Math.min(car.speed + info.boost, car.maxSpeed * 1.28);
+    car.boostTimer = Math.max(car.boostTimer, BOOST_DURATION);
+    spawnFx('💨', info.label);
+  }
+  car.isDrifting = false;
+  car.driftCharge = 0;
+}
 
 function updatePlayer(car, dt) {
   if (car.spinTimer > 0) {
     car.spinTimer -= dt;
     car.speed = Math.max(0, car.speed - COAST_DECEL * 2 * dt);
     car.z += car.speed * dt;
+    car.isDrifting = false;
+    car.driftCharge = 0;
     return;
   }
 
@@ -427,9 +465,26 @@ function updatePlayer(car, dt) {
   const speedPercent = car.speed / car.maxSpeed;
   const steer = dt * 2.2 * speedPercent;
 
-  if (keys.left) car.x -= steer * car.steerResponsiveness;
-  if (keys.right) car.x += steer * car.steerResponsiveness;
-  car.x -= steer * speedPercent * segment.curve * car.centrifugal;
+  // Hold Drift while steering into a turn to carve a tighter line; release
+  // it to cash in the charge you built up as a burst of speed.
+  const steerDir = keys.left ? -1 : (keys.right ? 1 : 0);
+  const drifting = keys.drift && steerDir !== 0 && speedPercent > DRIFT_MIN_SPEED_FACTOR;
+
+  if (drifting) {
+    car.isDrifting = true;
+    car.driftDir = steerDir;
+    const maxCharge = DRIFT_TIERS[DRIFT_TIERS.length - 1].time + 0.5;
+    car.driftCharge = Math.min(car.driftCharge + dt, maxCharge);
+  } else if (car.isDrifting) {
+    releaseDrift(car);
+  }
+
+  const steerMult = drifting ? DRIFT_STEER_MULT : 1;
+  const centrifugalMult = drifting ? DRIFT_CENTRIFUGAL_MULT : 1;
+
+  if (keys.left) car.x -= steer * car.steerResponsiveness * steerMult;
+  if (keys.right) car.x += steer * car.steerResponsiveness * steerMult;
+  car.x -= steer * speedPercent * segment.curve * car.centrifugal * centrifugalMult;
 
   const offRoad = Math.abs(car.x) > 1;
 
@@ -774,6 +829,19 @@ function drawCarSprite(car, pos) {
   const wheelR = size * 0.09;
   ctx.beginPath(); ctx.arc(-bodyW / 2, bodyH * 0.35, wheelR, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.arc(bodyW / 2, bodyH * 0.35, wheelR, 0, Math.PI * 2); ctx.fill();
+
+  // Drift sparks, colored by charge tier (blue -> orange -> pink)
+  if (car.isDrifting) {
+    const tier = driftTierFor(car.driftCharge);
+    const sparkColor = tier >= 3 ? DRIFT_TIERS[2].color : tier >= 2 ? DRIFT_TIERS[1].color : tier >= 1 ? DRIFT_TIERS[0].color : '#cfd6ff';
+    const pulse = 0.8 + Math.sin(performance.now() / 55) * 0.2;
+    ctx.fillStyle = sparkColor;
+    [-1, 1].forEach((side) => {
+      ctx.beginPath();
+      ctx.ellipse(side * bodyW * 0.42, bodyH * 0.55, size * 0.06 * pulse, size * 0.1 * pulse, 0, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
 
   // Boost flame
   if (car.boostTimer > 0) {
