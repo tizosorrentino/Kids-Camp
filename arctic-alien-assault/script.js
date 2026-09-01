@@ -5,7 +5,6 @@
 
 const CONFIG = {
   playerHitDamage: 3,      // % health lost per alien attack
-  shotgunDamage: 2,        // % health an alien loses per shot landed
   alienMaxHealth: 5,       // % health pool of a single regular alien
   armoredAlienMaxHealth: 10, // % health pool of an armored alien (double a regular one)
   armoredChance: 0.35,     // fraction of each squad that spawns armored
@@ -21,14 +20,15 @@ const CONFIG = {
   jumpSpeed: 7,
   gravity: -18,
   eyeHeight: 2.05,          // "very tall" soldier
-  mapHalf: 95,
+  mapHalf: 95,              // radius of the core battlefield (spawns, chests)
+  worldHalf: 180,           // radius of the walkable world, reaching out to the mountains
 };
 
 const WEAPON_TYPES = [
-  { name: 'Shotgun', color: 0x2c3b2c, fireCooldown: 0.65, pellets: 3 },
-  { name: 'Pulse Rifle', color: 0x3a5a6b, fireCooldown: 0.16, pellets: 1 },
-  { name: 'Plasma Blaster', color: 0x5a3a6b, fireCooldown: 0.35, pellets: 1 },
-  { name: 'Auto Cannon', color: 0x6b5a3a, fireCooldown: 0.10, pellets: 1 },
+  { name: 'Shotgun', color: 0x2c3b2c, fireCooldown: 0.65, pellets: 3, damage: 2 },
+  { name: 'Pulse Rifle', color: 0x3a5a6b, fireCooldown: 0.16, pellets: 1, damage: 3 },
+  { name: 'Plasma Blaster', color: 0x5a3a6b, fireCooldown: 0.35, pellets: 1, damage: 4 },
+  { name: 'Auto Cannon', color: 0x6b5a3a, fireCooldown: 0.10, pellets: 1, damage: 5 },
 ];
 
 /* ---------------- Sound (synthesized, no asset files) ---------------- */
@@ -77,7 +77,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x151f2b, 25, 150);
+scene.fog = new THREE.Fog(0x151f2b, 25, 240);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
@@ -155,8 +155,8 @@ scene.add(new THREE.AmbientLight(0x445566, 0.3));
 /* ---------------- Ground & Environment ---------------- */
 
 function buildGround() {
-  const size = CONFIG.mapHalf * 2 + 40;
-  const geo = new THREE.PlaneGeometry(size, size, 60, 60);
+  const size = (CONFIG.worldHalf + 20) * 2;
+  const geo = new THREE.PlaneGeometry(size, size, 90, 90);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i);
@@ -217,6 +217,8 @@ function addRock(x, z, scale) {
   obstacles.push({ x, z, radius: scale * 0.9 });
 }
 
+const mountains = []; // {x, z, radius, height, centerY} -- also used as climbable terrain
+
 function scatterEnvironment() {
   const half = CONFIG.mapHalf;
   for (let i = 0; i < 55; i++) {
@@ -231,17 +233,37 @@ function scatterEnvironment() {
     if (Math.hypot(x, z) < 8) continue;
     addRock(x, z, 0.6 + Math.random() * 1.1);
   }
-  // distant mountains
+  // climbable mountains ringing the battlefield
   const mountainMat = new THREE.MeshStandardMaterial({ color: 0x3d4f63, roughness: 1, flatShading: true });
   for (let i = 0; i < 18; i++) {
     const angle = (i / 18) * Math.PI * 2;
     const r = half + 30 + Math.random() * 20;
-    const mesh = new THREE.Mesh(new THREE.ConeGeometry(18 + Math.random() * 12, 40 + Math.random() * 30, 6), mountainMat);
-    mesh.position.set(Math.cos(angle) * r, 15, Math.sin(angle) * r);
+    const radius = 18 + Math.random() * 12;
+    const height = 40 + Math.random() * 30;
+    const centerY = 15;
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 6), mountainMat);
+    const x = Math.cos(angle) * r;
+    const z = Math.sin(angle) * r;
+    mesh.position.set(x, centerY, z);
     scene.add(mesh);
+    mountains.push({ x, z, radius, height, centerY });
   }
 }
 scatterEnvironment();
+
+// Ground height at any (x, z): the gentle snow bumps, or a mountain's slope
+// when standing on one -- lets the player walk up and climb the mountains.
+function terrainHeightAt(x, z) {
+  let h = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 0.6 + Math.sin(x * 0.15 + z * 0.1) * 0.25;
+  for (const m of mountains) {
+    const d = Math.hypot(x - m.x, z - m.z);
+    if (d < m.radius) {
+      const slopeY = m.centerY + m.height / 2 - d * (m.height / m.radius);
+      if (slopeY > h) h = slopeY;
+    }
+  }
+  return h;
+}
 
 /* ---------------- Falling Snow ---------------- */
 
@@ -812,7 +834,7 @@ function shoot() {
       if (alien) hitAliens.add(alien);
     }
   }
-  hitAliens.forEach(a => a.takeDamage(CONFIG.shotgunDamage));
+  hitAliens.forEach(a => a.takeDamage(wpn.type.damage));
 
   updateHUD();
 }
@@ -1199,17 +1221,20 @@ function updateMovement(dt) {
     if (Math.hypot(nextX - o.x, nextZ - o.z) < o.radius + 0.6) { blocked = true; break; }
   }
   if (!blocked) {
-    playerRig.position.x = THREE.MathUtils.clamp(nextX, -CONFIG.mapHalf, CONFIG.mapHalf);
-    playerRig.position.z = THREE.MathUtils.clamp(nextZ, -CONFIG.mapHalf, CONFIG.mapHalf);
+    playerRig.position.x = THREE.MathUtils.clamp(nextX, -CONFIG.worldHalf, CONFIG.worldHalf);
+    playerRig.position.z = THREE.MathUtils.clamp(nextZ, -CONFIG.worldHalf, CONFIG.worldHalf);
   }
 
-  // gravity / jump
+  // gravity / jump, following the ground height so mountains can be climbed
+  const groundY = terrainHeightAt(playerRig.position.x, playerRig.position.z) + CONFIG.eyeHeight;
   state.velocityY += CONFIG.gravity * dt;
   playerRig.position.y += state.velocityY * dt;
-  if (playerRig.position.y <= CONFIG.eyeHeight) {
-    playerRig.position.y = CONFIG.eyeHeight;
+  if (playerRig.position.y <= groundY) {
+    playerRig.position.y = groundY;
     state.velocityY = 0;
     state.onGround = true;
+  } else {
+    state.onGround = false;
   }
 
   // weapon bob
