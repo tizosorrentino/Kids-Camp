@@ -19,8 +19,6 @@
   const MAX_SPEED = 27;
   const SPEED_RAMP_TIME = 22;
   const ROLL_SPEED_MULT = 1.55;
-  const HIT_SPEED_MULT = 0.55;
-  const HIT_SLOW_DURATION = 0.7;
   const LANE_LERP_RATE = 9;
 
   const JUMP_VELOCITY = 13.5;
@@ -35,7 +33,6 @@
   const STUMBLE_DURATION = 0.5;
   const STUMBLE_DEPTH = 1.0;
   const GAP_TIME_PENALTY = 2.0;
-  const HIT_RING_LOSS = 3;
 
   const SAMPLE_STEP_STRAIGHT = 1.0;
   const LOOP_SAMPLES = 96;
@@ -80,6 +77,20 @@
       return { type: 'loop', radius };
     },
   };
+
+  // Repeatable stretch of alternating curves and hills used to pad tracks
+  // out to a much longer distance without hand-authoring every segment.
+  function windingChunks(count, baseSeg, curveDeg, riseAmt, gapEvery) {
+    const chunks = [];
+    for (let i = 0; i < count; i++) {
+      const dir = i % 2 === 0 ? 1 : -1;
+      chunks.push(P.straight(baseSeg, { curve: dir * curveDeg * DEG }));
+      chunks.push(P.straight(baseSeg - 2, { rise: riseAmt }));
+      chunks.push(P.straight(baseSeg - 2, { rise: -riseAmt }));
+      if ((i + 1) % gapEvery === 0) chunks.push(P.straight(6, { gap: true }));
+    }
+    return chunks;
+  }
 
   function addStraight(cursor, samples, length, curve, rise, isGap) {
     if (length <= 0) return;
@@ -263,10 +274,12 @@
   function buildDecorations(track, theme) {
     const group = new THREE.Group();
     let geo;
+    const isPalm = theme.decoType === 'palm';
     if (theme.decoType === 'tree') geo = new THREE.ConeGeometry(0.9, 2.6, 7);
     else if (theme.decoType === 'cactus') geo = new THREE.CylinderGeometry(0.32, 0.4, 2.2, 8);
+    else if (isPalm) geo = new THREE.CylinderGeometry(0.18, 0.26, 3.2, 7);
     else geo = new THREE.OctahedronGeometry(0.85, 0);
-    const mat = new THREE.MeshLambertMaterial({ color: theme.decoColor });
+    const mat = new THREE.MeshLambertMaterial({ color: isPalm ? theme.decoColor2 : theme.decoColor });
 
     const rng = mulberry32(999);
     const placements = [];
@@ -282,18 +295,31 @@
       });
     }
 
-    const inst = new THREE.InstancedMesh(geo, mat, Math.max(1, placements.length));
-    const m = new THREE.Matrix4();
-    if (placements.length === 0) {
-      m.makeScale(0.0001, 0.0001, 0.0001);
-      inst.setMatrixAt(0, m);
+    function buildInstances(geometry, material, scaleFn, yOffsetFn) {
+      const inst = new THREE.InstancedMesh(geometry, material, Math.max(1, placements.length));
+      const m = new THREE.Matrix4();
+      if (placements.length === 0) {
+        m.makeScale(0.0001, 0.0001, 0.0001);
+        inst.setMatrixAt(0, m);
+      }
+      placements.forEach((p, i) => {
+        const pos = yOffsetFn ? p.pos.clone().addScaledVector(new THREE.Vector3(0, 1, 0), yOffsetFn(p)) : p.pos;
+        const s = scaleFn(p);
+        m.compose(pos, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rot), new THREE.Vector3(s, s, s));
+        inst.setMatrixAt(i, m);
+      });
+      inst.instanceMatrix.needsUpdate = true;
+      return inst;
     }
-    placements.forEach((p, i) => {
-      m.compose(p.pos, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rot), new THREE.Vector3(p.scale, p.scale, p.scale));
-      inst.setMatrixAt(i, m);
-    });
-    inst.instanceMatrix.needsUpdate = true;
-    group.add(inst);
+
+    group.add(buildInstances(geo, mat, (p) => p.scale));
+
+    if (isPalm) {
+      const frondGeo = new THREE.ConeGeometry(1.1, 0.6, 6);
+      const frondMat = new THREE.MeshLambertMaterial({ color: theme.decoColor });
+      group.add(buildInstances(frondGeo, frondMat, (p) => p.scale * 1.1, (p) => p.scale * 3.1));
+    }
+
     return group;
   }
 
@@ -517,6 +543,7 @@
   const THEME_GRASS = { sky: '#8fd3ff', fog: '#8fd3ff', road: '#3a3f52', roadAlt: '#454b62', curbA: '#ffd23f', curbB: '#ffffff', ground: '#4caf6b', decoColor: '#2e7d4f', decoType: 'tree' };
   const THEME_DESERT = { sky: '#ffd59e', fog: '#ffd59e', road: '#6b5847', roadAlt: '#79634f', curbA: '#e8483f', curbB: '#ffffff', ground: '#e0b378', decoColor: '#3f7d43', decoType: 'cactus' };
   const THEME_ICE = { sky: '#cfe9ff', fog: '#cfe9ff', road: '#3d5872', roadAlt: '#456582', curbA: '#24e0c9', curbB: '#ffffff', ground: '#eaf6ff', decoColor: '#8fd8ff', decoType: 'crystal' };
+  const THEME_BEACH = { sky: '#8fe0ff', fog: '#8fe0ff', road: '#d9c290', roadAlt: '#e3cd9c', curbA: '#1fb6e0', curbB: '#ffffff', ground: '#e8cf8e', decoColor: '#2f9e4f', decoColor2: '#8a5a34', decoType: 'palm' };
 
   const MAPS = [
     {
@@ -528,7 +555,8 @@
         P.straight(6, { gap: true }), P.straight(10), P.straight(30, { curve: 25 * DEG }),
         P.straight(20, { rise: 6 }), P.straight(20, { rise: -6 }), P.straight(26, { curve: -40 * DEG }),
         P.straight(7, { gap: true }), P.straight(16), P.straight(22, { curve: 35 * DEG }),
-        P.straight(18, { rise: 5 }), P.straight(18, { rise: -5 }), P.straight(24), P.straight(20),
+        P.straight(18, { rise: 5 }), P.straight(18, { rise: -5 }), P.straight(24),
+        ...windingChunks(10, 20, 40, 6, 3), P.straight(20),
       ],
     },
     {
@@ -540,7 +568,8 @@
         P.straight(16, { rise: -5 }), P.straight(6, { gap: true }), P.straight(24),
         P.straight(18, { curve: 40 * DEG }), P.straight(16, { rise: 6 }), P.straight(5, { gap: true }),
         P.straight(16, { rise: -6 }), P.straight(20, { curve: -45 * DEG }), P.straight(18, { rise: 8 }),
-        P.straight(18, { rise: -8 }), P.straight(6, { gap: true }), P.straight(20),
+        P.straight(18, { rise: -8 }), P.straight(6, { gap: true }),
+        ...windingChunks(10, 22, 50, 7, 3), P.straight(20),
       ],
     },
     {
@@ -551,7 +580,21 @@
         P.straight(10, { rise: -5 }), P.loop(6), P.straight(14), P.straight(24, { curve: 30 * DEG }),
         P.straight(18, { curve: -40 * DEG }), P.straight(16, { rise: 5 }), P.straight(6, { gap: true }),
         P.straight(16, { rise: -5 }), P.straight(22, { curve: 50 * DEG }), P.straight(18, { rise: 6 }),
-        P.straight(18, { rise: -6 }), P.straight(20),
+        P.straight(18, { rise: -6 }),
+        ...windingChunks(10, 18, 45, 5, 3), P.straight(20),
+      ],
+    },
+    {
+      id: 'beach-bay', name: 'Beach Bay', feature: 'Sun, sand, and one big lagoon loop', theme: THEME_BEACH, seed: 4,
+      pieces: [
+        P.straight(16), P.straight(24, { curve: 40 * DEG }), P.straight(16, { rise: 5 }), P.straight(16, { rise: -5 }),
+        P.straight(6, { gap: true }), P.straight(14), P.loop(7.5), P.straight(12),
+        P.straight(22, { curve: -55 * DEG }), P.straight(16, { rise: 6 }), P.straight(16, { rise: -6 }),
+        P.straight(6, { gap: true }), P.straight(14), P.straight(26, { curve: 35 * DEG }),
+        P.straight(16, { rise: 5 }), P.straight(16, { rise: -5 }), P.straight(20, { curve: -30 * DEG }),
+        P.straight(18, { curve: 45 * DEG }), P.straight(16, { rise: 6 }), P.straight(16, { rise: -6 }),
+        P.straight(6, { gap: true }), P.straight(24),
+        ...windingChunks(10, 20, 42, 6, 3), P.straight(20),
       ],
     },
   ];
@@ -596,7 +639,7 @@
   // ============================================================
   // Game state
   // ============================================================
-  const STATES = { MENU: 'MENU', PLAYING: 'PLAYING', PAUSED: 'PAUSED', FINISH: 'FINISH' };
+  const STATES = { MENU: 'MENU', PLAYING: 'PLAYING', PAUSED: 'PAUSED', WIPEOUT: 'WIPEOUT', FINISH: 'FINISH' };
   let uiState = STATES.MENU;
   let worldGroup = null;
   let selectedMapIndex = 0;
@@ -607,7 +650,7 @@
     lateralOffset: 0, targetLane: 0,
     jumpHeight: 0, jumpVel: 0, grounded: true,
     rollHeld: false, isRolling: false,
-    slowTimer: 0, stumbleTimer: 0,
+    stumbleTimer: 0,
     rings: 0, score: 0,
   };
 
@@ -626,6 +669,11 @@
   const pauseOverlay = document.getElementById('pause-overlay');
   const resumeButton = document.getElementById('resume-button');
   const pauseMenuButton = document.getElementById('pause-menu-button');
+
+  const wipeoutOverlay = document.getElementById('wipeout-overlay');
+  const wipeoutMessageEl = document.getElementById('wipeout-message');
+  const wipeoutRetryButton = document.getElementById('wipeout-retry-button');
+  const wipeoutMenuButton = document.getElementById('wipeout-menu-button');
 
   const finishOverlay = document.getElementById('finish-overlay');
   const finishTimeEl = document.getElementById('finish-time');
@@ -648,8 +696,9 @@
     uiState = next;
     menuOverlay.classList.toggle('hidden', uiState !== STATES.MENU);
     pauseOverlay.classList.toggle('hidden', uiState !== STATES.PAUSED);
+    wipeoutOverlay.classList.toggle('hidden', uiState !== STATES.WIPEOUT);
     finishOverlay.classList.toggle('hidden', uiState !== STATES.FINISH);
-    hudEl.classList.toggle('hidden', uiState !== STATES.PLAYING && uiState !== STATES.PAUSED);
+    hudEl.classList.toggle('hidden', uiState !== STATES.PLAYING && uiState !== STATES.PAUSED && uiState !== STATES.WIPEOUT);
     touchControls.classList.toggle('hidden', !(isTouchDevice && uiState === STATES.PLAYING));
   }
 
@@ -716,7 +765,6 @@
     G.grounded = true;
     G.rollHeld = false;
     G.isRolling = false;
-    G.slowTimer = 0;
     G.stumbleTimer = 0;
     G.rings = 0;
     G.score = 0;
@@ -761,6 +809,12 @@
     finishBestEl.classList.toggle('hidden', !isNewBest);
   }
 
+  function wipeOut() {
+    setUiState(STATES.WIPEOUT);
+    const ringCount = G.rings;
+    wipeoutMessageEl.textContent = `You crashed into a spike after collecting ${ringCount} ring${ringCount === 1 ? '' : 's'}. Roll into a ball or jump over spikes to survive them!`;
+  }
+
   // ---------- per-frame update ----------
   function checkRings() {
     G.items.rings.forEach((r) => {
@@ -776,25 +830,30 @@
   }
 
   function checkObstacles() {
-    G.items.obstacles.forEach((o) => {
-      if (o.consumed) return;
-      if (Math.abs(o.dist - G.distance) > OBSTACLE_HIT_DIST_R) return;
+    const obstacles = G.items.obstacles;
+    for (let i = 0; i < obstacles.length; i++) {
+      const o = obstacles[i];
+      if (o.consumed) continue;
+      if (Math.abs(o.dist - G.distance) > OBSTACLE_HIT_DIST_R) continue;
       const laneOffset = o.lane * LANE_WIDTH;
-      if (Math.abs(laneOffset - G.lateralOffset) > OBSTACLE_HIT_LANE_R) return;
-      o.consumed = true;
-      hideInstance(G.obsMesh, o.id);
+      if (Math.abs(laneOffset - G.lateralOffset) > OBSTACLE_HIT_LANE_R) continue;
+
       if (G.isRolling) {
+        o.consumed = true;
+        hideInstance(G.obsMesh, o.id);
         G.score += 25;
         showToast('Smashed it! +25');
       } else if (!G.grounded && G.jumpHeight >= OBSTACLE_CLEAR_HEIGHT) {
+        o.consumed = true;
+        hideInstance(G.obsMesh, o.id);
         G.score += 5;
       } else {
-        G.rings = Math.max(0, G.rings - HIT_RING_LOSS);
-        G.slowTimer = HIT_SLOW_DURATION;
-        G.stumbleTimer = STUMBLE_DURATION;
-        showToast(`Ouch! -${HIT_RING_LOSS} rings`);
+        o.consumed = true;
+        hideInstance(G.obsMesh, o.id);
+        wipeOut();
+        return;
       }
-    });
+    }
   }
 
   function update(dt) {
@@ -803,10 +862,6 @@
     const rampT = Math.min(1, G.runTime / SPEED_RAMP_TIME);
     let speed = BASE_SPEED + (MAX_SPEED - BASE_SPEED) * rampT;
     if (G.isRolling) speed *= ROLL_SPEED_MULT;
-    if (G.slowTimer > 0) {
-      speed *= HIT_SPEED_MULT;
-      G.slowTimer -= dt;
-    }
     G.speed = speed;
 
     if (!G.grounded) {
@@ -923,6 +978,8 @@
   pauseMenuButton.addEventListener('click', () => { setUiState(STATES.MENU); refreshMapGrid(); });
   finishRetryButton.addEventListener('click', () => startRun(G.map));
   finishMenuButton.addEventListener('click', () => { setUiState(STATES.MENU); refreshMapGrid(); });
+  wipeoutRetryButton.addEventListener('click', () => startRun(G.map));
+  wipeoutMenuButton.addEventListener('click', () => { setUiState(STATES.MENU); refreshMapGrid(); });
   startButton.addEventListener('click', () => startRun(MAPS[selectedMapIndex]));
 
   // ---------- map select UI ----------
