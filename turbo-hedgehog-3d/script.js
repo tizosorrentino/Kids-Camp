@@ -303,7 +303,7 @@
     const rings = [];
     const obstacles = [];
     let d = 8;
-    let obstacleCooldown = 5;
+    let obstacleCooldown = 2;
     while (d < track.totalLength - 12) {
       const f = getFrameAt(track, d);
       if (isInGap(track, d, 2.5) || f.kind === 'loop') { d += 4; continue; }
@@ -323,13 +323,19 @@
 
       obstacleCooldown -= 1;
       if (obstacleCooldown <= 0) {
-        const lane = [-1, 0, 1][Math.floor(rng() * 3)];
         const of = getFrameAt(track, d + 3);
         if (of.kind !== 'loop' && !isInGap(track, d + 3, 2.5)) {
-          obstacles.push({ dist: d + 3, lane });
+          const lanes = [-1, 0, 1];
+          const primaryLane = lanes[Math.floor(rng() * 3)];
+          obstacles.push({ dist: d + 3, lane: primaryLane });
+          if (rng() < 0.4) {
+            const remaining = lanes.filter((l) => l !== primaryLane);
+            const secondLane = remaining[Math.floor(rng() * remaining.length)];
+            obstacles.push({ dist: d + 3, lane: secondLane });
+          }
           d += 4;
         }
-        obstacleCooldown = 3 + Math.floor(rng() * 3);
+        obstacleCooldown = 1 + Math.floor(rng() * 2);
       }
     }
     rings.forEach((r, i) => { r.id = i; r.collected = false; });
@@ -519,7 +525,10 @@
         P.straight(18), P.straight(26, { curve: 45 * DEG }), P.straight(18, { rise: 5 }), P.straight(12, { rise: -5 }),
         P.straight(6, { gap: true }), P.straight(14), P.loop(8), P.straight(10),
         P.straight(24, { curve: -50 * DEG }), P.straight(16, { rise: 4 }), P.straight(16, { rise: -4 }),
-        P.straight(6, { gap: true }), P.straight(10), P.straight(30, { curve: 25 * DEG }), P.straight(20),
+        P.straight(6, { gap: true }), P.straight(10), P.straight(30, { curve: 25 * DEG }),
+        P.straight(20, { rise: 6 }), P.straight(20, { rise: -6 }), P.straight(26, { curve: -40 * DEG }),
+        P.straight(7, { gap: true }), P.straight(16), P.straight(22, { curve: 35 * DEG }),
+        P.straight(18, { rise: 5 }), P.straight(18, { rise: -5 }), P.straight(24), P.straight(20),
       ],
     },
     {
@@ -528,7 +537,10 @@
         P.straight(16), P.straight(20, { rise: 6 }), P.straight(14, { rise: -6 }), P.straight(6, { gap: true }),
         P.straight(12), P.straight(22, { curve: -55 * DEG }), P.straight(18, { rise: 7 }), P.straight(5, { gap: true }),
         P.straight(16, { rise: -7 }), P.straight(20, { curve: 55 * DEG }), P.straight(16, { rise: 5 }),
-        P.straight(16, { rise: -5 }), P.straight(6, { gap: true }), P.straight(24), P.straight(20),
+        P.straight(16, { rise: -5 }), P.straight(6, { gap: true }), P.straight(24),
+        P.straight(18, { curve: 40 * DEG }), P.straight(16, { rise: 6 }), P.straight(5, { gap: true }),
+        P.straight(16, { rise: -6 }), P.straight(20, { curve: -45 * DEG }), P.straight(18, { rise: 8 }),
+        P.straight(18, { rise: -8 }), P.straight(6, { gap: true }), P.straight(20),
       ],
     },
     {
@@ -536,7 +548,10 @@
       pieces: [
         P.straight(16), P.straight(20, { curve: 35 * DEG }), P.loop(7), P.straight(12),
         P.straight(20, { curve: -70 * DEG }), P.straight(14, { rise: 5 }), P.straight(6, { gap: true }),
-        P.straight(10, { rise: -5 }), P.loop(6), P.straight(14), P.straight(24, { curve: 30 * DEG }), P.straight(20),
+        P.straight(10, { rise: -5 }), P.loop(6), P.straight(14), P.straight(24, { curve: 30 * DEG }),
+        P.straight(18, { curve: -40 * DEG }), P.straight(16, { rise: 5 }), P.straight(6, { gap: true }),
+        P.straight(16, { rise: -5 }), P.straight(22, { curve: 50 * DEG }), P.straight(18, { rise: 6 }),
+        P.straight(18, { rise: -6 }), P.straight(20),
       ],
     },
   ];
