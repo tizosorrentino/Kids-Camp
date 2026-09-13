@@ -245,80 +245,141 @@
     const group = new THREE.Group();
 
     const skinMat = new THREE.MeshStandardMaterial({ color: cfg.skin, roughness: 0.8 });
-    const shirtMat = new THREE.MeshStandardMaterial({ color: cfg.shirt, roughness: 0.7 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: cfg.pants, roughness: 0.7 });
+    const shirtMat = new THREE.MeshStandardMaterial({ color: cfg.shirt, roughness: 0.62 });
+    const pantsMat = new THREE.MeshStandardMaterial({ color: cfg.pants, roughness: 0.68 });
+    const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.5 });
 
-    // Legs
-    const legGeo = new THREE.BoxGeometry(0.28, 0.75, 0.28);
+    // Legs — rounded capsules read as actual limbs instead of plank-shaped boxes
+    const legGeo = new THREE.CapsuleGeometry(0.13, 0.62, 4, 10);
     const legL = new THREE.Mesh(legGeo, pantsMat);
-    legL.position.set(-0.16, 0.375, 0);
+    legL.position.set(-0.15, 0.44, 0);
     const legR = new THREE.Mesh(legGeo, pantsMat);
-    legR.position.set(0.16, 0.375, 0);
+    legR.position.set(0.15, 0.44, 0);
     group.add(legL, legR);
 
-    // Torso
-    const torsoGeo = new THREE.BoxGeometry(0.62, 0.68, 0.36);
-    const torso = new THREE.Mesh(torsoGeo, shirtMat);
-    torso.position.set(0, 1.09, 0);
+    // Shoes
+    const shoeGeo = new THREE.BoxGeometry(0.18, 0.12, 0.32);
+    const shoeL = new THREE.Mesh(shoeGeo, shoeMat);
+    shoeL.position.set(-0.15, 0.07, 0.05);
+    const shoeR = new THREE.Mesh(shoeGeo, shoeMat);
+    shoeR.position.set(0.15, 0.07, 0.05);
+    group.add(shoeL, shoeR);
+
+    // Hips (smooths the leg-to-torso joint)
+    const hips = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.1, 4, 10), pantsMat);
+    hips.position.set(0, 0.86, 0);
+    group.add(hips);
+
+    // Torso — tapered capsule reads far more like a human ribcage than a box
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.5, 4, 12), shirtMat);
+    torso.position.set(0, 1.18, 0);
+    torso.scale.set(1.15, 1, 0.72);
     group.add(torso);
 
-    // Arms
-    const armGeo = new THREE.BoxGeometry(0.22, 0.62, 0.22);
-    const armL = new THREE.Mesh(armGeo, shirtMat);
-    armL.position.set(-0.44, 1.08, 0);
-    const armR = new THREE.Mesh(armGeo, shirtMat);
-    armR.position.set(0.44, 1.08, 0);
+    // Shoulders (rounds off the arm sockets)
+    const shoulderGeo = new THREE.SphereGeometry(0.13, 12, 12);
+    const shoulderL = new THREE.Mesh(shoulderGeo, shirtMat);
+    shoulderL.position.set(-0.34, 1.42, 0);
+    const shoulderR = new THREE.Mesh(shoulderGeo, shirtMat);
+    shoulderR.position.set(0.34, 1.42, 0);
+    group.add(shoulderL, shoulderR);
+
+    // Arms — upper arm (sleeve) + forearm (skin) for a two-segment silhouette.
+    // Each arm is a Group pivoted AT THE SHOULDER (not the world origin) so
+    // that rotating it for the walk-swing animation pivots naturally instead
+    // of sweeping the whole limb around the character's feet.
+    const upperArmGeo = new THREE.CapsuleGeometry(0.095, 0.28, 4, 8);
+    const foreArmGeo = new THREE.CapsuleGeometry(0.08, 0.26, 4, 8);
+    const handGeo = new THREE.SphereGeometry(0.095, 10, 10);
+
+    const armL = new THREE.Group();
+    armL.position.set(-0.34, 1.42, 0);
+    const upperArmL = new THREE.Mesh(upperArmGeo, shirtMat);
+    upperArmL.position.set(0, -0.18, 0);
+    const foreArmL = new THREE.Mesh(foreArmGeo, skinMat);
+    foreArmL.position.set(0, -0.47, 0);
+    const handL = new THREE.Mesh(handGeo, skinMat);
+    handL.position.set(0, -0.64, 0);
+    armL.add(upperArmL, foreArmL, handL);
+
+    const armR = new THREE.Group();
+    armR.position.set(0.34, 1.42, 0);
+    const upperArmR = new THREE.Mesh(upperArmGeo, shirtMat);
+    upperArmR.position.set(0, -0.18, 0);
+    const foreArmR = new THREE.Mesh(foreArmGeo, skinMat);
+    foreArmR.position.set(0, -0.47, 0);
+    const handR = new THREE.Mesh(handGeo, skinMat);
+    handR.position.set(0, -0.64, 0);
+    armR.add(upperArmR, foreArmR, handR);
+
     group.add(armL, armR);
 
-    // Hands
-    const handGeo = new THREE.SphereGeometry(0.11, 10, 10);
-    const handL = new THREE.Mesh(handGeo, skinMat);
-    handL.position.set(-0.44, 0.74, 0);
-    const handR = new THREE.Mesh(handGeo, skinMat);
-    handR.position.set(0.44, 0.74, 0);
-    group.add(handL, handR);
+    // Neck
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.12, 10), skinMat);
+    neck.position.set(0, 1.5, 0);
+    group.add(neck);
 
-    // Head
-    const headGeo = new THREE.SphereGeometry(0.26, 16, 16);
-    const head = new THREE.Mesh(headGeo, skinMat);
-    head.position.set(0, 1.62, 0);
+    // Head — slightly egg-shaped rather than a perfect sphere
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 20), skinMat);
+    head.position.set(0, 1.68, 0);
+    head.scale.set(0.92, 1.08, 0.96);
     group.add(head);
+
+    // Simple friendly face: eyes + a soft mouth line, subtle enough to stay stylized
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.3 });
+    const eyeGeo = new THREE.SphereGeometry(0.028, 8, 8);
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeL.position.set(-0.09, 1.71, 0.215);
+    const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+    eyeR.position.set(0.09, 1.71, 0.215);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.02), new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.6 }));
+    mouth.position.set(0, 1.615, 0.225);
+    group.add(eyeL, eyeR, mouth);
+
+    // Hair (simple scalp cap so the head doesn't read as a bare sphere)
+    if (cfg.hat === 'none') {
+      const hairMat = new THREE.MeshStandardMaterial({ color: cfg.hair !== undefined ? cfg.hair : 0x2b1a12, roughness: 0.75 });
+      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.245, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.52), hairMat);
+      hair.position.set(0, 1.705, -0.01);
+      hair.scale.set(0.96, 1, 1);
+      group.add(hair);
+    }
 
     // Hat
     if (cfg.hat === 'cap') {
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
-      cap.position.set(0, 1.72, 0);
-      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
-      brim.position.set(0, 1.62, 0.14);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
+      cap.position.set(0, 1.78, 0);
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
+      brim.position.set(0, 1.68, 0.14);
       group.add(cap, brim);
     } else if (cfg.hat === 'helmet') {
-      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.29, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.4, roughness: 0.3 }));
-      helmet.position.set(0, 1.64, 0);
+      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.4, roughness: 0.3 }));
+      helmet.position.set(0, 1.70, 0);
       group.add(helmet);
     } else if (cfg.hat === 'crown') {
-      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.28, 0.18, 8), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.6, roughness: 0.2 }));
-      crown.position.set(0, 1.86, 0);
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.18, 8), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.6, roughness: 0.2 }));
+      crown.position.set(0, 1.92, 0);
       group.add(crown);
     }
 
     // Accessory
     if (cfg.accessory === 'backpack') {
       const pack = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.22), new THREE.MeshStandardMaterial({ color: 0x7c2d12 }));
-      pack.position.set(0, 1.08, -0.28);
+      pack.position.set(0, 1.16, -0.28);
       group.add(pack);
     } else if (cfg.accessory === 'cape') {
       const cape = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.05), new THREE.MeshStandardMaterial({ color: 0xdc2626, side: THREE.DoubleSide }));
-      cape.position.set(0, 0.95, -0.22);
+      cape.position.set(0, 1.05, -0.22);
       cape.rotation.x = 0.15;
       group.add(cape);
     } else if (cfg.accessory === 'wings') {
       const wingGeo = new THREE.BoxGeometry(0.5, 0.3, 0.06);
       const wingMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc });
       const wL = new THREE.Mesh(wingGeo, wingMat);
-      wL.position.set(-0.4, 1.15, -0.2);
+      wL.position.set(-0.4, 1.32, -0.2);
       wL.rotation.z = 0.4;
       const wR = new THREE.Mesh(wingGeo, wingMat);
-      wR.position.set(0.4, 1.15, -0.2);
+      wR.position.set(0.4, 1.32, -0.2);
       wR.rotation.z = -0.4;
       group.add(wL, wR);
     }
@@ -327,6 +388,84 @@
     group.userData.armR = armR;
     group.userData.legL = legL;
     group.userData.legR = legR;
+
+    if (cfg.weapon && cfg.weapon !== 'fists') {
+      const weaponMesh = makeWeaponMesh(cfg.weapon);
+      weaponMesh.position.set(0.1, -0.62, 0.13);
+      weaponMesh.rotation.y = Math.PI / 2;
+      armR.add(weaponMesh);
+      group.userData.heldWeapon = weaponMesh;
+    }
+    return group;
+  }
+
+  // Builds a toy-blaster prop shaped distinctly per weapon so the player is
+  // clearly holding *something* in third person — chunky, brightly colored,
+  // translucent water tanks etc., deliberately toylike rather than gun-like.
+  function makeWeaponMesh(weaponId) {
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.45 });
+    const gripMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.6 });
+
+    function tank(color, radius, length) {
+      return new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 14), new THREE.MeshPhysicalMaterial({
+        color, roughness: 0.15, metalness: 0.05, transmission: 0.35, transparent: true, opacity: 0.85,
+      }));
+    }
+
+    // grip (common to all)
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.2, 0.09), gripMat);
+    grip.position.set(0, -0.12, -0.05);
+    grip.rotation.x = 0.25;
+    group.add(grip);
+
+    if (weaponId === 'water') {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.32), bodyMat);
+      body.position.set(0, 0, 0.05);
+      const t = tank(0x38bdf8, 0.08, 0.22);
+      t.rotation.z = Math.PI / 2;
+      t.position.set(0, 0.09, -0.02);
+      const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.1, 10), bodyMat);
+      nozzle.rotation.z = Math.PI / 2;
+      nozzle.position.set(0, 0, 0.26);
+      group.add(body, t, nozzle);
+    } else if (weaponId === 'foam') {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.11, 0.36), new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.4 }));
+      body.position.set(0, 0, 0.05);
+      const dart = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.14, 10), new THREE.MeshStandardMaterial({ color: 0xfacc15 }));
+      dart.rotation.z = Math.PI / 2;
+      dart.position.set(0, 0.005, 0.3);
+      const foregrip = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.1, 0.06), gripMat);
+      foregrip.position.set(0, -0.09, 0.16);
+      group.add(body, dart, foregrip);
+    } else if (weaponId === 'confetti') {
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.3, 12), new THREE.MeshStandardMaterial({ color: 0xdb2777, roughness: 0.35 }));
+      body.rotation.z = Math.PI / 2;
+      body.position.set(0, 0, 0.05);
+      const flare = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.14, 14, 1, true), new THREE.MeshStandardMaterial({ color: 0xf472b6, side: THREE.DoubleSide }));
+      flare.rotation.x = Math.PI / 2;
+      flare.position.set(0, 0, 0.26);
+      group.add(body, flare);
+    } else if (weaponId === 'bubble') {
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.4, 14), bodyMat);
+      body.rotation.z = Math.PI / 2;
+      body.position.set(0, 0, 0.08);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.018, 8, 16), new THREE.MeshStandardMaterial({ color: 0xa78bfa, roughness: 0.3 }));
+      ring.position.set(0, 0, 0.32);
+      const t = tank(0xc4b5fd, 0.1, 0.18);
+      t.position.set(0, 0.1, -0.02);
+      group.add(body, ring, t);
+    } else if (weaponId === 'mega') {
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.5, 14), new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.35 }));
+      body.rotation.z = Math.PI / 2;
+      body.position.set(0, 0, 0.1);
+      const t = tank(0xfdba74, 0.12, 0.22);
+      t.position.set(0, 0.12, -0.02);
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.16), gripMat);
+      stock.position.set(0, -0.02, -0.22);
+      group.add(body, t, stock);
+    }
+
     return group;
   }
 
@@ -448,6 +587,70 @@
   // ------------------------------------------------------------
   // City generation: grid of roads + building blocks
   // ------------------------------------------------------------
+  // Procedurally draws a building facade (windows on a base wall color) onto
+  // a canvas sized to that specific building's proportions, so a flat colored
+  // box reads as an actual building instead of a solid-color block.
+  function makeFacadeTexture(baseColor, opts) {
+    opts = opts || {};
+    const cols = opts.cols || 4;
+    const rows = opts.rows || 8;
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const base = '#' + baseColor.toString(16).padStart(6, '0');
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // subtle side-lighting gradient so flat faces don't look perfectly flat
+    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    grad.addColorStop(0, 'rgba(0,0,0,0.16)');
+    grad.addColorStop(0.5, 'rgba(255,255,255,0.06)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.2)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const cellW = canvas.width / cols;
+    const cellH = canvas.height / rows;
+    const winW = cellW * (opts.winScale || 0.62);
+    const winH = cellH * (opts.winScale || 0.58);
+    const litChance = opts.litChance !== undefined ? opts.litChance : 0.32;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = c * cellW + (cellW - winW) / 2;
+        const y = r * cellH + (cellH - winH) / 2;
+        const lit = Math.random() < litChance;
+        ctx.fillStyle = lit ? 'rgba(253,224,71,0.88)' : 'rgba(30,41,59,0.82)';
+        ctx.fillRect(x, y, winW, winH);
+        ctx.strokeStyle = 'rgba(15,23,42,0.45)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, winW, winH);
+        if (lit) {
+          ctx.fillStyle = 'rgba(255,255,255,0.25)';
+          ctx.fillRect(x, y, winW, winH * 0.35);
+        }
+      }
+    }
+    // ground floor storefront band
+    ctx.fillStyle = 'rgba(15,23,42,0.5)';
+    ctx.fillRect(0, canvas.height - cellH * 0.9, canvas.width, cellH * 0.9);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  // Builds the 6-face material array for a building box: textured facade on
+  // the four side faces, a flat rooftop material on top/bottom.
+  function makeBuildingMaterials(baseColor, w, h, d, opts) {
+    const cols = Math.max(2, Math.round(Math.max(w, d) / 3.2));
+    const rows = Math.max(3, Math.round(h / 2.6));
+    const tex = makeFacadeTexture(baseColor, Object.assign({ cols, rows }, opts));
+    const sideMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.82, metalness: 0.05 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x292b30, roughness: 0.92 });
+    return [sideMat, sideMat, roofMat, roofMat, sideMat, sideMat];
+  }
+
   function buildCity() {
     const roadMat = new THREE.MeshStandardMaterial({ color: 0x2b2f36 });
     const roadGeo = new THREE.PlaneGeometry(WORLD_HALF * 2 + BLOCK_SIZE, ROAD_WIDTH);
@@ -484,7 +687,7 @@
         if (isShopBlock) {
           shopPlaced = true;
           const w = footprint * 0.8, d = footprint * 0.8, h = 8;
-          const mat = new THREE.MeshStandardMaterial({ color: 0x0ea5e9 });
+          const mat = makeBuildingMaterials(0x0ea5e9, w, h, d, { winScale: 0.78, litChance: 0.7 });
           const shop = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
           shop.position.set(cx, h / 2, cz);
           shop.castShadow = true;
@@ -507,7 +710,7 @@
           const px = cx + offsetX;
           const pz = cz;
           const color = buildingPalette[Math.floor(Math.random() * buildingPalette.length)];
-          const mat = new THREE.MeshStandardMaterial({ color });
+          const mat = makeBuildingMaterials(color, w, h, d);
           const building = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
           building.position.set(px, h / 2, pz);
           building.castShadow = true;
@@ -525,7 +728,7 @@
 
     if (!shopMarkerPos) {
       shopMarkerPos = { x: 0, z: 0 };
-      const shop = new THREE.Mesh(new THREE.BoxGeometry(18, 8, 18), new THREE.MeshStandardMaterial({ color: 0x0ea5e9 }));
+      const shop = new THREE.Mesh(new THREE.BoxGeometry(18, 8, 18), makeBuildingMaterials(0x0ea5e9, 18, 8, 18, { winScale: 0.78, litChance: 0.7 }));
       shop.position.set(0, 4, 0);
       shop.castShadow = true;
       scene.add(shop);
@@ -578,7 +781,7 @@
   // Player
   // ------------------------------------------------------------
   function createPlayer() {
-    playerMesh = buildCharacterMesh(state.character);
+    playerMesh = buildCharacterMesh(Object.assign({}, state.character, { weapon: state.currentWeaponId }));
     playerMesh.castShadow = true;
     playerMesh.traverse((c) => { c.castShadow = true; });
     scene.add(playerMesh);
@@ -820,7 +1023,28 @@
     if (!state.ownedWeapons.includes(id)) return;
     state.currentWeaponId = id;
     updateWeaponHUD();
+    updateHeldWeaponMesh();
     writeSave();
+  }
+
+  // Swaps the 3D prop in the player's hand to match the equipped weapon
+  // without rebuilding the whole character model.
+  function updateHeldWeaponMesh() {
+    if (!playerMesh) return;
+    const armR = playerMesh.userData.armR;
+    if (playerMesh.userData.heldWeapon) {
+      armR.remove(playerMesh.userData.heldWeapon);
+      disposeObject(playerMesh.userData.heldWeapon);
+      playerMesh.userData.heldWeapon = null;
+    }
+    if (state.currentWeaponId !== 'fists') {
+      const weaponMesh = makeWeaponMesh(state.currentWeaponId);
+      weaponMesh.position.set(0.1, -0.62, 0.13);
+      weaponMesh.rotation.y = Math.PI / 2;
+      weaponMesh.traverse((c) => { c.castShadow = true; });
+      armR.add(weaponMesh);
+      playerMesh.userData.heldWeapon = weaponMesh;
+    }
   }
 
   function updateWeaponHUD() {

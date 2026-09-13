@@ -1,0 +1,160 @@
+<title>Blaster City 3D</title>
+<link rel="stylesheet" href="style.css">
+
+<div id="app">
+
+  <!-- 3D canvas goes here -->
+  <canvas id="scene"></canvas>
+
+  <!-- ===================== START SCREEN ===================== -->
+  <div id="start-overlay" class="overlay">
+    <div class="overlay-card">
+      <h1 id="game-title">🏙️ BLASTER CITY 3D 🚗</h1>
+      <p class="subtitle">An open-world blaster &amp; driving adventure!</p>
+      <ul class="feature-list">
+        <li>🕹️ Drive cars around the city with a GPS map</li>
+        <li>💦 Buy blasters at the Blaster Shop</li>
+        <li>📱 Call contacts on your phone for missions</li>
+        <li>🤖 Bust glitching robots for cash</li>
+        <li>🎨 Customize your character</li>
+      </ul>
+      <button id="btn-to-customize" class="big-button">Next: Customize My Character ▶</button>
+    </div>
+  </div>
+
+  <!-- ===================== CHARACTER CUSTOMIZER ===================== -->
+  <div id="customize-overlay" class="overlay hidden">
+    <div class="overlay-card customize-card">
+      <h2>🎨 Customize Your Character</h2>
+      <div class="customize-layout">
+        <canvas id="char-preview" width="360" height="420"></canvas>
+        <div class="customize-options" id="customize-options">
+          <!-- filled by JS -->
+        </div>
+      </div>
+      <div class="customize-actions">
+        <button id="btn-randomize" class="small-button">🎲 Randomize</button>
+        <button id="btn-start-game" class="big-button">Start Playing ▶</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== HUD (in-game) ===================== -->
+  <div id="hud" class="hidden">
+
+    <div id="hud-top-left">
+      <canvas id="minimap" width="150" height="150"></canvas>
+      <div id="compass-arrow">➤</div>
+      <div id="waypoint-info" class="hidden">📍 <span id="waypoint-distance">--</span>m</div>
+      <div class="bar-wrap">
+        <div class="bar-label">❤️ Health</div>
+        <div class="bar-track"><div id="health-fill" class="bar-fill health"></div></div>
+      </div>
+    </div>
+
+    <div id="hud-top-right">
+      <div id="money-display">💰 $<span id="money-value">0</span></div>
+      <div id="weapon-display">
+        <span id="weapon-icon">✋</span>
+        <span id="weapon-name">Fists</span>
+      </div>
+    </div>
+
+    <div id="mission-banner" class="hidden">
+      <span id="mission-text"></span>
+    </div>
+
+    <div id="prompt-banner" class="hidden"></div>
+
+    <!-- top icon buttons -->
+    <div id="icon-buttons">
+      <button id="btn-phone" class="icon-button" title="Phone">📱</button>
+      <button id="btn-map" class="icon-button" title="Map">🗺️</button>
+      <button id="btn-weapons" class="icon-button" title="Weapons">🎯</button>
+    </div>
+
+    <!-- ===================== TOUCH CONTROLS ===================== -->
+    <div id="touch-controls">
+      <div id="joystick-zone">
+        <div id="joystick-base">
+          <div id="joystick-knob"></div>
+        </div>
+      </div>
+
+      <div id="action-buttons">
+        <button id="btn-fire" class="action-button fire-button">🔫</button>
+        <button id="btn-enter" class="action-button">🚪</button>
+        <button id="btn-jump" class="action-button">⬆️</button>
+      </div>
+    </div>
+
+    <div id="look-zone"></div>
+
+    <div id="controls-hint">
+      WASD/Arrows: Move &nbsp;|&nbsp; Drag right side: Look &nbsp;|&nbsp; E: Enter/Exit &nbsp;|&nbsp; Click/Space: Fire &nbsp;|&nbsp; 1-5: Weapons
+    </div>
+  </div>
+
+  <!-- ===================== SHOP OVERLAY ===================== -->
+  <div id="shop-overlay" class="overlay hidden">
+    <div class="overlay-card panel-card">
+      <div class="panel-header">
+        <h2>💦 Ace's Blaster Shop</h2>
+        <button class="close-button" data-close="shop">✕</button>
+      </div>
+      <p class="panel-sub">Your cash: 💰 $<span id="shop-money">0</span></p>
+      <div id="shop-list" class="item-list"></div>
+    </div>
+  </div>
+
+  <!-- ===================== PHONE OVERLAY ===================== -->
+  <div id="phone-overlay" class="overlay hidden">
+    <div class="phone-body">
+      <div class="phone-notch"></div>
+      <div class="phone-screen">
+        <div class="panel-header">
+          <h2>📱 Contacts</h2>
+          <button class="close-button" data-close="phone">✕</button>
+        </div>
+        <div id="phone-contacts" class="item-list"></div>
+        <div id="phone-call-status" class="hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MAP OVERLAY ===================== -->
+  <div id="map-overlay" class="overlay hidden">
+    <div class="overlay-card map-card">
+      <div class="panel-header">
+        <h2>🗺️ City Map</h2>
+        <button class="close-button" data-close="map">✕</button>
+      </div>
+      <p class="panel-sub" id="map-instructions">Tap anywhere on the map to drop a GPS waypoint.</p>
+      <canvas id="map-canvas" width="480" height="480"></canvas>
+      <div class="customize-actions">
+        <button id="btn-clear-waypoint" class="small-button">Clear Waypoint</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== WEAPON WHEEL OVERLAY ===================== -->
+  <div id="weapon-wheel-overlay" class="overlay hidden">
+    <div class="overlay-card">
+      <h2>🎯 Choose Weapon</h2>
+      <div id="weapon-wheel-list" class="item-list"></div>
+    </div>
+  </div>
+
+  <div id="toast-layer"></div>
+
+  <div id="loading-screen">
+    <div class="loading-inner">
+      <div class="loading-spinner"></div>
+      <p>Loading Blaster City…</p>
+    </div>
+  </div>
+
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="game.js"></script>
