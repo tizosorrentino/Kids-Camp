@@ -28,6 +28,7 @@
         currentWeaponId: state.currentWeaponId,
         character: state.character,
         hasBaseAccess: state.hasBaseAccess,
+        apartmentsOwned: apartments.map((a) => a.owned),
       }));
     } catch (e) { /* storage unavailable, ignore */ }
   }
@@ -87,9 +88,12 @@
     nearBank: null,
     nearPizza: null,
     nearRecruiter: false,
+    nearApartment: null,
     hasBaseAccess: false,
     lastShotTime: 0,
   };
+
+  let pendingApartmentsOwned = null;
 
   const saved = loadSave();
   if (saved) {
@@ -98,6 +102,7 @@
     state.ownedWeapons = Array.isArray(saved.ownedWeapons) && saved.ownedWeapons.length ? saved.ownedWeapons : state.ownedWeapons;
     state.currentWeaponId = saved.currentWeaponId || state.currentWeaponId;
     if (saved.character) Object.assign(state.character, saved.character);
+    if (Array.isArray(saved.apartmentsOwned)) pendingApartmentsOwned = saved.apartmentsOwned;
   }
 
   function getWeapon(id) { return WEAPONS.find((w) => w.id === id); }
@@ -553,6 +558,7 @@
   let coins = [];
   let banks = []; // {x, z, cooldownUntil}
   let pizzaPlaces = []; // {x, z, cooldownUntil}
+  let apartments = []; // {x, z, price, owned}
   let shopMarkerPos = null;
   let gameStarted = false;
   let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
@@ -568,6 +574,10 @@
     initThree();
     buildCity();
     buildMilitaryBase();
+    buildMountains();
+    if (pendingApartmentsOwned) {
+      apartments.forEach((a, i) => { if (pendingApartmentsOwned[i]) a.owned = true; });
+    }
     createPlayer();
     spawnVehicles();
     spawnRobots();
@@ -594,7 +604,7 @@
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x8fd3f4);
-    scene.fog = new THREE.Fog(0x8fd3f4, 60, 190);
+    scene.fog = new THREE.Fog(0x8fd3f4, 60, 460);
 
     camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 500);
 
@@ -611,7 +621,7 @@
     sun.shadow.camera.far = 260;
     scene.add(sun);
 
-    const groundGeo = new THREE.PlaneGeometry(WORLD_HALF * 3.4, WORLD_HALF * 3.4);
+    const groundGeo = new THREE.PlaneGeometry(WORLD_HALF * 5, WORLD_HALF * 5);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x4d7c4a });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -746,6 +756,13 @@
     const pizzaSpots = [
       { bx: Math.min(CITY_BLOCKS - 1, mid + 2), bz: Math.max(0, mid - 1) },
     ];
+    const apartmentSpots = [
+      { bx: Math.max(0, mid - 1), bz: Math.min(CITY_BLOCKS - 1, mid + 1), price: 800 },
+      { bx: Math.min(CITY_BLOCKS - 1, mid + 1), bz: Math.max(0, mid - 2), price: 1500 },
+    ];
+    const isTakenSpot = (bx, bz) => bx === mid && bz === mid
+      || bankSpots.some((s) => s.bx === bx && s.bz === bz)
+      || pizzaSpots.some((s) => s.bx === bx && s.bz === bz);
 
     for (let bx = 0; bx < CITY_BLOCKS; bx++) {
       for (let bz = 0; bz < CITY_BLOCKS; bz++) {
@@ -756,6 +773,7 @@
         const isShopBlock = !shopMarkerPos && bx === mid && bz === mid;
         const bankSpot = bankSpots.find((b) => b.bx === bx && b.bz === bz && b.bx !== mid);
         const pizzaSpot = pizzaSpots.find((p) => p.bx === bx && p.bz === bz && p.bx !== mid && !bankSpots.some((b) => b.bx === bx && b.bz === bz));
+        const apartmentSpot = apartmentSpots.find((a) => a.bx === bx && a.bz === bz && !isTakenSpot(bx, bz));
 
         if (isShopBlock) {
           const w = footprint * 0.8, d = footprint * 0.8, h = 8;
@@ -796,6 +814,20 @@
           addFloatingSign(cx, h + 1.6, cz, '🍕 PIZZA PLACE');
           buildingBoxes.push(boxOf(cx, cz, w, d, h));
           pizzaPlaces.push({ x: cx, z: cz, cooldownUntil: 0 });
+          continue;
+        }
+
+        if (apartmentSpot) {
+          const w = footprint * 0.72, d = footprint * 0.72, h = 16;
+          const mat = makeBuildingMaterials(0xc2884f, w, h, d, { winScale: 0.65, litChance: 0.4 });
+          const apt = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+          apt.position.set(cx, h / 2, cz);
+          apt.castShadow = true;
+          apt.receiveShadow = true;
+          scene.add(apt);
+          addFloatingSign(cx, h + 1.6, cz, '🏠 APARTMENTS');
+          buildingBoxes.push(boxOf(cx, cz, w, d, h));
+          apartments.push({ x: cx, z: cz, price: apartmentSpot.price, owned: false });
           continue;
         }
 
@@ -873,7 +905,7 @@
   // military base out to the east, or nobody could ever drive there.
   function worldClampR() {
     const cityR = WORLD_HALF + BLOCK_SIZE / 2 - 2;
-    return militaryBaseCenter ? Math.max(cityR, militaryBaseCenter.x + 30) : cityR;
+    return militaryBaseCenter ? Math.max(cityR, militaryBaseCenter.clampR || militaryBaseCenter.x + 30) : cityR;
   }
 
   // ------------------------------------------------------------
@@ -886,9 +918,9 @@
   let militaryBaseCenter = null;
 
   function buildMilitaryBase() {
-    const cx = WORLD_HALF + 55, cz = 0;
-    militaryBaseCenter = { x: cx, z: cz };
-    const halfSize = 26, T = 2, WALL_H = 6, gateHalfWidth = 6;
+    const cx = WORLD_HALF + 80, cz = 0;
+    const halfSize = 45, T = 2, WALL_H = 6, gateHalfWidth = 7;
+    militaryBaseCenter = { x: cx, z: cz, clampR: cx + halfSize + 15 };
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x4b5142, roughness: 0.85 });
 
     function addWallSegment(wx, wz, w, d) {
@@ -911,20 +943,25 @@
 
     addFloatingSign(cx - halfSize, WALL_H + 2, cz, '🪖 MILITARY BASE');
 
-    // Hangars
-    const hangarMat = makeBuildingMaterials(0x5b6350, 16, 9, 12, { winScale: 0.6, litChance: 0.35 });
+    // Hangars — tucked in the far NE corner, well clear of the open tarmac
+    // where the jets sit (they used to overlap; now there's real separation)
+    const hangarMat = makeBuildingMaterials(0x5b6350, 20, 10, 15, { winScale: 0.6, litChance: 0.35 });
     [-1, 1].forEach((side) => {
-      const hangar = new THREE.Mesh(new THREE.BoxGeometry(16, 9, 12), hangarMat);
-      hangar.position.set(cx + side * 7, 4.5, cz - 15);
+      const hx = cx + side * 13, hz = cz - 32;
+      const hangar = new THREE.Mesh(new THREE.BoxGeometry(20, 10, 15), hangarMat);
+      hangar.position.set(hx, 5, hz);
       hangar.castShadow = true;
       hangar.receiveShadow = true;
       scene.add(hangar);
-      buildingBoxes.push(boxOf(cx + side * 7, cz - 15, 16, 12, 9));
+      buildingBoxes.push(boxOf(hx, hz, 20, 15, 10));
     });
 
     // Decorative soldiers (static — not part of any AI system, purely set
     // dressing, never hostile and never a combat target)
-    const soldierSpots = [[cx - 10, cz + 10], [cx + 10, cz + 10], [cx, cz + 4], [cx - 14, cz - 2]];
+    const soldierSpots = [
+      [cx - 15, cz + 20], [cx + 15, cz + 20], [cx, cz + 10], [cx - 25, cz - 5],
+      [cx + 25, cz + 5], [cx - 5, cz - 20], [cx + 30, cz - 20], [cx - 30, cz + 30],
+    ];
     soldierSpots.forEach(([sx, sz]) => {
       const soldier = buildCharacterMesh({
         skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
@@ -937,15 +974,25 @@
       scene.add(soldier);
     });
 
-    // Tanks and jets — real drivable vehicles (see makeTankMesh/makeJetMesh
-    // and the per-type speed handling in updateVehicle)
-    [[cx - 8, cz + 8], [cx + 8, cz + 8]].forEach((pos) => {
+    // Tanks — south-west quarter
+    [[cx - 20, cz + 15], [cx - 8, cz + 15], [cx - 20, cz + 28]].forEach((pos) => {
       const mesh = makeTankMesh();
       mesh.position.set(pos[0], 0, pos[1]);
       scene.add(mesh);
       vehicles.push({ mesh, x: pos[0], z: pos[1], heading: Math.PI, speed: 0, occupied: false, type: 'tank' });
     });
-    [[cx - 8, cz - 8], [cx + 8, cz - 8]].forEach((pos) => {
+
+    // Military jeeps — parked near the gate for a quick grab
+    [[cx - 30, cz - 8], [cx - 30, cz + 8]].forEach((pos) => {
+      const mesh = makeJeepMesh();
+      mesh.position.set(pos[0], 0, pos[1]);
+      scene.add(mesh);
+      vehicles.push({ mesh, x: pos[0], z: pos[1], heading: Math.PI / 2, speed: 0, occupied: false, type: 'jeep' });
+    });
+
+    // Jets — out on the open tarmac (south-east quarter), nowhere near the
+    // hangar buildings so they no longer clip into them
+    [[cx + 15, cz + 20], [cx + 28, cz + 20], [cx + 15, cz + 32]].forEach((pos) => {
       const mesh = makeJetMesh();
       mesh.position.set(pos[0], 0, pos[1]);
       scene.add(mesh);
@@ -960,6 +1007,78 @@
     scene.add(kiosk);
     addFloatingSign(kioskX, 3.6, kioskZ, '🪖 GET A BASE JOB');
     militaryBaseCenter.recruiter = { x: kioskX, z: kioskZ };
+  }
+
+  function makeJeepMesh() {
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.8 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.8 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.6, 3.6), bodyMat);
+    body.position.y = 0.55;
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.5, 1.2), bodyMat);
+    hood.position.set(0, 0.5, 1.6);
+    const rollBar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.08), darkMat);
+    rollBar.position.set(0, 1.15, -0.6);
+    const spare = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 12), darkMat);
+    spare.rotation.z = Math.PI / 2;
+    spare.position.set(0, 0.75, -1.85);
+    group.add(body, hood, rollBar, spare);
+    const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.3, 12);
+    [[-0.95, 0.34, 1.2], [0.95, 0.34, 1.2], [-0.95, 0.34, -1.2], [0.95, 0.34, -1.2]].forEach((p) => {
+      const wheel = new THREE.Mesh(wheelGeo, darkMat);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(p[0], p[1], p[2]);
+      group.add(wheel);
+    });
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  // Distant mountain backdrop, unreachable — pure scenery north of the
+  // city — with a Hollywood-style sign on the tallest peak, spelled out
+  // as individual letter panels rather than one flat text sprite.
+  function buildMountains() {
+    const mz = -(WORLD_HALF + 165);
+    const peaks = [
+      { x: -260, h: 95, r: 115 }, { x: -150, h: 120, r: 130 }, { x: -20, h: 145, r: 150 },
+      { x: 110, h: 125, r: 135 }, { x: 230, h: 100, r: 120 }, { x: 340, h: 85, r: 105 },
+    ];
+    peaks.forEach((p, i) => {
+      const mat = new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0x5b6b4f : 0x4a5a40, roughness: 0.95 });
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(p.r, p.h, 9), mat);
+      cone.position.set(p.x, p.h / 2 - 3, mz);
+      cone.receiveShadow = true;
+      scene.add(cone);
+    });
+    const tallest = peaks.reduce((a, b) => (b.h > a.h ? b : a));
+    buildHollywoodSign(tallest.x, tallest.h * 0.42, mz + tallest.r * 0.55);
+  }
+
+  function buildHollywoodSign(x, y, z) {
+    const letters = 'HOLLYWOOD'.split('');
+    const letterW = 7, gap = 1.6;
+    const totalW = letters.length * letterW + (letters.length - 1) * gap;
+    const startX = x - totalW / 2 + letterW / 2;
+    letters.forEach((ch, i) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128; canvas.height = 160;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, 128, 160);
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(4, 4, 120, 152);
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 130px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ch, 64, 90);
+      const tex = new THREE.CanvasTexture(canvas);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.7 });
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(letterW, letterW * 1.25), mat);
+      plane.position.set(startX + i * (letterW + gap), y, z);
+      scene.add(plane);
+    });
   }
 
   function makeTankMesh() {
@@ -1699,7 +1818,7 @@
 
   // Wider than the city grid alone so the military base (out past the
   // east edge) still shows up on the full map instead of being clipped off.
-  const MAP_HALF = WORLD_HALF + 70;
+  const MAP_HALF = WORLD_HALF + 180;
 
   function worldToMapPx(x, z, size) {
     return {
@@ -1760,6 +1879,12 @@
       const p = worldToMapPx(militaryBaseCenter.x, militaryBaseCenter.z, size);
       mapCtx.fillText('🪖', p.px, p.py + 6);
     }
+
+    // apartments
+    apartments.forEach((apt) => {
+      const p = worldToMapPx(apt.x, apt.z, size);
+      mapCtx.fillText(apt.owned ? '🏠' : '🔒', p.px, p.py + 6);
+    });
 
     // robots
     mapCtx.fillStyle = '#ef4444';
@@ -1910,6 +2035,13 @@
       miniCtx.textAlign = 'center';
       miniCtx.fillText('🪖', p.px, p.py + 4);
     }
+    apartments.forEach((apt) => {
+      if (Math.hypot(apt.x - player.x, apt.z - player.z) > MINI_RANGE) return;
+      const p = toMini(apt.x, apt.z);
+      miniCtx.font = '13px sans-serif';
+      miniCtx.textAlign = 'center';
+      miniCtx.fillText(apt.owned ? '🏠' : '🔒', p.px, p.py + 4);
+    });
 
     // player arrow (always centered, points with heading) — same direct
     // forward-vector construction as drawMap(), see the comment there.
@@ -2022,6 +2154,16 @@
     }
     state.nearRecruiter = nearRecruiter;
 
+    // nearest apartment
+    let nearApartment = null, nearApartmentDist = 9;
+    if (!state.inVehicle) {
+      for (const apt of apartments) {
+        const d = Math.hypot(apt.x - player.x, apt.z - player.z);
+        if (d < nearApartmentDist) { nearApartment = apt; nearApartmentDist = d; }
+      }
+    }
+    state.nearApartment = nearApartment;
+
     const promptEl = $('prompt-banner');
     if (state.inVehicle) {
       promptEl.textContent = 'Press 🚪 or E to exit the car';
@@ -2053,6 +2195,18 @@
         : 'Tap here to get a Military Base job ($1000) 🪖';
       promptEl.classList.remove('hidden');
       promptEl.onclick = state.hasBaseAccess ? null : getMilitaryJob;
+    } else if (state.nearApartment) {
+      const apt = state.nearApartment;
+      if (apt.owned) {
+        const locked = performance.now() / 1000 < (apt.restCooldownUntil || 0);
+        promptEl.textContent = locked ? '🏠 Just rested — check back soon' : 'Tap here to go rest in your apartment 🏠';
+        promptEl.classList.remove('hidden');
+        promptEl.onclick = () => restAtApartment(apt);
+      } else {
+        promptEl.textContent = `Tap here to buy this apartment ($${apt.price}) 🏠`;
+        promptEl.classList.remove('hidden');
+        promptEl.onclick = () => buyApartment(apt);
+      }
     } else {
       promptEl.classList.add('hidden');
       promptEl.onclick = null;
@@ -2074,6 +2228,28 @@
     if (state.hasBaseAccess || !militaryGateBox) return false;
     const g = militaryGateBox;
     return x > g.minX && x < g.maxX && z > g.minZ && z < g.maxZ;
+  }
+
+  function buyApartment(apt) {
+    if (apt.owned) return;
+    if (state.money < apt.price) { toast(`🏠 You need $${apt.price} to buy this apartment.`); return; }
+    state.money -= apt.price;
+    apt.owned = true;
+    updateHUDMoney();
+    writeSave();
+    toast('🏠 You bought the apartment! Come back anytime to rest.', 3000);
+  }
+
+  function restAtApartment(apt) {
+    if (!apt.owned) { toast(`🏠 You need to buy this apartment first ($${apt.price}).`); return; }
+    const now = performance.now() / 1000;
+    if (now < (apt.restCooldownUntil || 0)) {
+      toast("🏠 You're not tired yet. Try again in a bit.");
+      return;
+    }
+    apt.restCooldownUntil = now + 30;
+    healPlayer(100);
+    toast('🏠 You rested up — health fully restored!', 2000);
   }
 
   function grabPizza(place) {
@@ -2469,7 +2645,7 @@
       toast('💥💥 A car exploded!', 2000);
     }
     let spot;
-    if (v.type === 'tank' || v.type === 'jet') spot = randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 15, 3);
+    if (v.type === 'tank' || v.type === 'jet' || v.type === 'jeep') spot = randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 20, 3);
     else if (v.occupied) spot = randomRoadSpot();
     else spot = randomOpenSpot(3);
     v.x = spot.x; v.z = spot.z;
@@ -2581,13 +2757,15 @@
     get pedestrians() { return pedestrians; },
     get banks() { return banks; },
     get pizzaPlaces() { return pizzaPlaces; },
+    get apartments() { return apartments; },
     get militaryBaseCenter() { return militaryBaseCenter; },
     get militaryGateBox() { return militaryGateBox; },
     get buildingBoxes() { return buildingBoxes; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
     fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
-    getFloorHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, CONTACTS, WEAPONS,
+    getFloorHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment, restAtApartment,
+    CONTACTS, WEAPONS,
   };
 
 })();
