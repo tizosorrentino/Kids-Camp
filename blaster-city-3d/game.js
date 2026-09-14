@@ -576,6 +576,7 @@
     hideOverlay(loadingScreen);
     updateHUDMoney();
     updateWeaponHUD();
+    updateHealthUI();
     setupInput();
     clock = new THREE.Clock();
     requestAnimationFrame(loop);
@@ -765,7 +766,7 @@
           shop.receiveShadow = true;
           scene.add(shop);
           addFloatingSign(cx, h + 1.6, cz, '💦 BLASTER SHOP');
-          buildingBoxes.push(boxOf(cx, cz, w, d));
+          buildingBoxes.push(boxOf(cx, cz, w, d, h));
           shopMarkerPos = { x: cx, z: cz };
           continue;
         }
@@ -779,7 +780,7 @@
           bank.receiveShadow = true;
           scene.add(bank);
           addFloatingSign(cx, h + 1.6, cz, '🏦 BANK');
-          buildingBoxes.push(boxOf(cx, cz, w, d));
+          buildingBoxes.push(boxOf(cx, cz, w, d, h));
           banks.push({ x: cx, z: cz, cooldownUntil: 0 });
           continue;
         }
@@ -793,7 +794,7 @@
           place.receiveShadow = true;
           scene.add(place);
           addFloatingSign(cx, h + 1.6, cz, '🍕 PIZZA PLACE');
-          buildingBoxes.push(boxOf(cx, cz, w, d));
+          buildingBoxes.push(boxOf(cx, cz, w, d, h));
           pizzaPlaces.push({ x: cx, z: cz, cooldownUntil: 0 });
           continue;
         }
@@ -819,7 +820,7 @@
           building.castShadow = true;
           building.receiveShadow = true;
           scene.add(building);
-          buildingBoxes.push(boxOf(px, pz, w, d));
+          buildingBoxes.push(boxOf(px, pz, w, d, h));
 
           // roof accent
           const roof = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 0.6, d * 1.02), new THREE.MeshStandardMaterial({ color: 0x1f2937 }));
@@ -836,12 +837,36 @@
       shop.castShadow = true;
       scene.add(shop);
       addFloatingSign(0, 9.6, 0, '💦 BLASTER SHOP');
-      buildingBoxes.push(boxOf(0, 0, 18, 18));
+      buildingBoxes.push(boxOf(0, 0, 18, 18, 8));
     }
   }
 
-  function boxOf(cx, cz, w, d) {
-    return { minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 };
+  function boxOf(cx, cz, w, d, h) {
+    return { minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, h };
+  }
+
+  // Tallest rooftop (tracked via the optional height on boxOf) covering
+  // (x,z), or 0 for open ground — the "floor" the player rests on, used by
+  // the jump/gravity system so landing on top of a building actually works.
+  function getFloorHeightAt(x, z) {
+    let best = 0;
+    for (const b of buildingBoxes) {
+      if (b.h && x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ && b.h > best) best = b.h;
+    }
+    return best;
+  }
+
+  // Like collidesWithBuildings, but a building only blocks you if you're
+  // below its roof height — once you've jumped up onto a rooftop you can
+  // walk across it instead of colliding with your own building's "walls".
+  function collidesWithBuildingsAtHeight(x, z, margin, y) {
+    for (const b of buildingBoxes) {
+      if (x > b.minX - margin && x < b.maxX + margin && z > b.minZ - margin && z < b.maxZ + margin) {
+        if (b.h && y >= b.h - 0.35) continue;
+        return true;
+      }
+    }
+    return false;
   }
 
   // The world-bounds clamp has to reach past the city grid to cover the
@@ -894,7 +919,7 @@
       hangar.castShadow = true;
       hangar.receiveShadow = true;
       scene.add(hangar);
-      buildingBoxes.push(boxOf(cx + side * 7, cz - 15, 16, 12));
+      buildingBoxes.push(boxOf(cx + side * 7, cz - 15, 16, 12, 9));
     });
 
     // Decorative soldiers (static — not part of any AI system, purely set
@@ -1067,6 +1092,7 @@
       x: 4, z: 10, heading: 0, speed: 0,
       walking: false,
       bobPhase: 0,
+      y: 0, vy: 0, grounded: true, jumpsUsed: 0, jumpRequest: false,
     };
     playerMesh.position.set(player.x, 0, player.z);
   }
@@ -1256,6 +1282,7 @@
       keys[e.code] = true;
       if (e.code === 'KeyE') tryEnterExitVehicle();
       if (e.code === 'Space') { e.preventDefault(); fireWeapon(); }
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') player.jumpRequest = true;
       if (e.code >= 'Digit1' && e.code <= 'Digit6') {
         const idx = parseInt(e.code.slice(-1), 10) - 1;
         const owned = WEAPONS.filter((w) => state.ownedWeapons.includes(w.id));
@@ -2080,6 +2107,10 @@
   // ==============================================================
   // UPDATE LOOP
   // ==============================================================
+  const GRAVITY = 28;
+  const JUMP1_VELOCITY = 11;
+  const JUMP2_VELOCITY = 22; // double jump goes much higher — enough to clear shorter rooftops
+
   function updatePlayerWalking(dt) {
     const kb = keyboardMove();
     let mx = input.moveX + kb.mx;
@@ -2096,24 +2127,73 @@
       const inputAngle = Math.atan2(-mx, -my);
       player.heading = cameraYaw + Math.PI + inputAngle;
       const speed = 6.2;
-      const nx = player.x + Math.sin(player.heading) * speed * dt * Math.min(mag, 1);
-      const nz = player.z + Math.cos(player.heading) * speed * dt * Math.min(mag, 1);
-      if (!collidesWithBuildings(nx, player.z, 0.6) && !blockedByMilitaryGate(nx, player.z)) player.x = nx;
-      if (!collidesWithBuildings(player.x, nz, 0.6) && !blockedByMilitaryGate(player.x, nz)) player.z = nz;
+      const step = speed * dt * Math.min(mag, 1);
+      const nx = player.x + Math.sin(player.heading) * step;
+      const nz = player.z + Math.cos(player.heading) * step;
+      // Height-aware: a building only blocks you below its roof line, so
+      // once a jump has carried you up onto one you can walk across it.
+      if (!collidesWithBuildingsAtHeight(nx, player.z, 0.6, player.y) && !blockedByMilitaryGate(nx, player.z)) player.x = nx;
+      if (!collidesWithBuildingsAtHeight(player.x, nz, 0.6, player.y) && !blockedByMilitaryGate(player.x, nz)) player.z = nz;
       player.bobPhase += dt * 10;
+
+      // Every ~10 steps (10 units walked) regain a little health.
+      player.distanceWalked = (player.distanceWalked || 0) + step;
+      while (player.distanceWalked - (player.lastHealAt || 0) >= 10) {
+        player.lastHealAt = (player.lastHealAt || 0) + 10;
+        healPlayer(5);
+      }
+    }
+
+    // Jump / gravity — a tap starts the first jump, a second tap while
+    // airborne is a much higher double jump, high enough to reach onto
+    // shorter rooftops (see getFloorHeightAt / collidesWithBuildingsAtHeight).
+    if (player.jumpRequest) {
+      player.jumpRequest = false;
+      if (player.jumpsUsed < 2) {
+        player.vy = player.jumpsUsed === 0 ? JUMP1_VELOCITY : JUMP2_VELOCITY;
+        player.jumpsUsed += 1;
+        player.grounded = false;
+      }
+    }
+    player.vy -= GRAVITY * dt;
+    player.y += player.vy * dt;
+    const floorY = getFloorHeightAt(player.x, player.z);
+    if (player.y <= floorY) {
+      player.y = floorY;
+      player.vy = 0;
+      player.grounded = true;
+      player.jumpsUsed = 0;
+    } else {
+      player.grounded = false;
     }
 
     const clampR = worldClampR();
     player.x = Math.max(-clampR, Math.min(clampR, player.x));
     player.z = Math.max(-clampR, Math.min(clampR, player.z));
 
-    playerMesh.position.set(player.x, player.walking ? Math.abs(Math.sin(player.bobPhase)) * 0.06 : 0, player.z);
+    const bob = (player.walking && player.grounded) ? Math.abs(Math.sin(player.bobPhase)) * 0.06 : 0;
+    playerMesh.position.set(player.x, player.y + bob, player.z);
     playerMesh.rotation.y = player.heading;
     const armSwing = player.walking ? Math.sin(player.bobPhase) * 0.6 : 0;
     if (playerMesh.userData.armL) playerMesh.userData.armL.rotation.x = armSwing;
     if (playerMesh.userData.armR) playerMesh.userData.armR.rotation.x = -armSwing;
     if (playerMesh.userData.legL) playerMesh.userData.legL.rotation.x = -armSwing;
     if (playerMesh.userData.legR) playerMesh.userData.legR.rotation.x = armSwing;
+  }
+
+  function healPlayer(amount) {
+    if (state.health >= 100) return;
+    state.health = Math.min(100, state.health + amount);
+    updateHealthUI();
+  }
+
+  function damagePlayer(amount) {
+    state.health = Math.max(0, state.health - amount);
+    updateHealthUI();
+  }
+
+  function updateHealthUI() {
+    $('health-fill').style.width = Math.max(0, state.health) + '%';
   }
 
   function updateVehicle(dt) {
@@ -2369,6 +2449,73 @@
     if (v) {
       v.smokingUntil = now + 6; // engine smokes for a while after a hard hit
       v.lastSmokeAt = 0;
+      v.crashCount = (v.crashCount || 0) + 1;
+      if (v.crashCount >= 10) explodeVehicle(v);
+    }
+  }
+
+  // Ten hard crashes totals the car. If you're the one driving it, you get
+  // thrown clear (still just as non-violent as everything else — this is
+  // about the CAR, not people) and lose a big chunk of health; the car
+  // itself respawns fresh elsewhere a moment later.
+  function explodeVehicle(v) {
+    spawnExplosionFx(v.x, v.z);
+    const wasPlayerCar = state.inVehicle === v;
+    if (wasPlayerCar) {
+      tryEnterExitVehicle(); // eject at the crash site before we move the car
+      damagePlayer(70);
+      toast('💥💥 Your car exploded! -70% health', 2500);
+    } else {
+      toast('💥💥 A car exploded!', 2000);
+    }
+    let spot;
+    if (v.type === 'tank' || v.type === 'jet') spot = randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 15, 3);
+    else if (v.occupied) spot = randomRoadSpot();
+    else spot = randomOpenSpot(3);
+    v.x = spot.x; v.z = spot.z;
+    if (spot.heading !== undefined) v.heading = spot.heading;
+    v.speed = 0;
+    v.crashCount = 0;
+    v.smokingUntil = 0;
+    v.mesh.position.set(v.x, 0, v.z);
+    v.mesh.rotation.y = v.heading;
+  }
+
+  function spawnExplosionFx(x, z) {
+    const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 10), new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.9 }));
+    flash.position.set(x, 1, z);
+    scene.add(flash);
+    const flashStart = performance.now();
+    function animFlash() {
+      const t = (performance.now() - flashStart) / 500;
+      if (t >= 1) { scene.remove(flash); flash.geometry.dispose(); flash.material.dispose(); return; }
+      const s = 1 + t * 4;
+      flash.scale.set(s, s, s);
+      flash.material.opacity = 0.9 * (1 - t);
+      requestAnimationFrame(animFlash);
+    }
+    animFlash();
+
+    for (let i = 0; i < 8; i++) {
+      setTimeout(() => {
+        const puff = new THREE.Mesh(
+          new THREE.SphereGeometry(0.4 + Math.random() * 0.3, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0x374151, transparent: true, opacity: 0.7 })
+        );
+        puff.position.set(x + (Math.random() - 0.5) * 2, 0.8 + Math.random() * 1, z + (Math.random() - 0.5) * 2);
+        scene.add(puff);
+        const start = performance.now();
+        function anim() {
+          const t = (performance.now() - start) / 1200;
+          if (t >= 1) { scene.remove(puff); puff.geometry.dispose(); puff.material.dispose(); return; }
+          puff.position.y += 0.01;
+          const s = 1 + t * 2.5;
+          puff.scale.set(s, s, s);
+          puff.material.opacity = 0.7 * (1 - t);
+          requestAnimationFrame(anim);
+        }
+        anim();
+      }, i * 60);
     }
   }
 
@@ -2439,7 +2586,8 @@
     get buildingBoxes() { return buildingBoxes; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
-    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate, CONTACTS, WEAPONS,
+    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
+    getFloorHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, CONTACTS, WEAPONS,
   };
 
 })();
