@@ -27,6 +27,7 @@
         ownedWeapons: state.ownedWeapons,
         currentWeaponId: state.currentWeaponId,
         character: state.character,
+        hasBaseAccess: state.hasBaseAccess,
       }));
     } catch (e) { /* storage unavailable, ignore */ }
   }
@@ -85,12 +86,15 @@
     nearVehicle: null,
     nearBank: null,
     nearPizza: null,
+    nearRecruiter: false,
+    hasBaseAccess: false,
     lastShotTime: 0,
   };
 
   const saved = loadSave();
   if (saved) {
     state.money = typeof saved.money === 'number' ? saved.money : state.money;
+    state.hasBaseAccess = !!saved.hasBaseAccess;
     state.ownedWeapons = Array.isArray(saved.ownedWeapons) && saved.ownedWeapons.length ? saved.ownedWeapons : state.ownedWeapons;
     state.currentWeaponId = saved.currentWeaponId || state.currentWeaponId;
     if (saved.character) Object.assign(state.character, saved.character);
@@ -554,12 +558,16 @@
   let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
   let cameraPitch = 0.28;
   const CAMERA_DIST = 7.5;
+  let crashShakeTime = 0;
+  let crashShakeMag = 0;
+  let lastCrashToastAt = 0;
 
   function startGameWorld() {
     if (gameStarted) return;
     gameStarted = true;
     initThree();
     buildCity();
+    buildMilitaryBase();
     createPlayer();
     spawnVehicles();
     spawnRobots();
@@ -602,7 +610,7 @@
     sun.shadow.camera.far = 260;
     scene.add(sun);
 
-    const groundGeo = new THREE.PlaneGeometry(WORLD_HALF * 2.6, WORLD_HALF * 2.6);
+    const groundGeo = new THREE.PlaneGeometry(WORLD_HALF * 3.4, WORLD_HALF * 3.4);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x4d7c4a });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -834,6 +842,143 @@
 
   function boxOf(cx, cz, w, d) {
     return { minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 };
+  }
+
+  // The world-bounds clamp has to reach past the city grid to cover the
+  // military base out to the east, or nobody could ever drive there.
+  function worldClampR() {
+    const cityR = WORLD_HALF + BLOCK_SIZE / 2 - 2;
+    return militaryBaseCenter ? Math.max(cityR, militaryBaseCenter.x + 30) : cityR;
+  }
+
+  // ------------------------------------------------------------
+  // Military Base — a walled, job-gated compound out past the city grid.
+  // No guards, no combat, no killing: without the job the gate simply
+  // won't let you through; with it, you can walk in and take a tank or
+  // jet for a drive. Kept firmly non-violent — see the chat for why.
+  // ------------------------------------------------------------
+  let militaryGateBox = null;
+  let militaryBaseCenter = null;
+
+  function buildMilitaryBase() {
+    const cx = WORLD_HALF + 55, cz = 0;
+    militaryBaseCenter = { x: cx, z: cz };
+    const halfSize = 26, T = 2, WALL_H = 6, gateHalfWidth = 6;
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x4b5142, roughness: 0.85 });
+
+    function addWallSegment(wx, wz, w, d) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, WALL_H, d), wallMat);
+      wall.position.set(wx, WALL_H / 2, wz);
+      wall.castShadow = true;
+      wall.receiveShadow = true;
+      scene.add(wall);
+      buildingBoxes.push(boxOf(wx, wz, w, d));
+    }
+
+    addWallSegment(cx, cz + halfSize, halfSize * 2 + T, T); // south
+    addWallSegment(cx, cz - halfSize, halfSize * 2 + T, T); // north
+    addWallSegment(cx + halfSize, cz, T, halfSize * 2 + T); // east
+    // west wall, split to leave a gate gap facing the city
+    const segLen = halfSize - gateHalfWidth;
+    addWallSegment(cx - halfSize, cz - (halfSize + gateHalfWidth) / 2, T, segLen);
+    addWallSegment(cx - halfSize, cz + (halfSize + gateHalfWidth) / 2, T, segLen);
+    militaryGateBox = { minX: cx - halfSize - 2.5, maxX: cx - halfSize + 2.5, minZ: cz - gateHalfWidth, maxZ: cz + gateHalfWidth };
+
+    addFloatingSign(cx - halfSize, WALL_H + 2, cz, '🪖 MILITARY BASE');
+
+    // Hangars
+    const hangarMat = makeBuildingMaterials(0x5b6350, 16, 9, 12, { winScale: 0.6, litChance: 0.35 });
+    [-1, 1].forEach((side) => {
+      const hangar = new THREE.Mesh(new THREE.BoxGeometry(16, 9, 12), hangarMat);
+      hangar.position.set(cx + side * 7, 4.5, cz - 15);
+      hangar.castShadow = true;
+      hangar.receiveShadow = true;
+      scene.add(hangar);
+      buildingBoxes.push(boxOf(cx + side * 7, cz - 15, 16, 12));
+    });
+
+    // Decorative soldiers (static — not part of any AI system, purely set
+    // dressing, never hostile and never a combat target)
+    const soldierSpots = [[cx - 10, cz + 10], [cx + 10, cz + 10], [cx, cz + 4], [cx - 14, cz - 2]];
+    soldierSpots.forEach(([sx, sz]) => {
+      const soldier = buildCharacterMesh({
+        skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
+        shirt: 0x4b5320, pants: 0x3a3f2e, hat: 'helmet', accessory: 'none',
+        hairStyle: 'none', top: 'jacket', bottom: 'pants',
+      });
+      soldier.position.set(sx, 0, sz);
+      soldier.rotation.y = Math.random() * Math.PI * 2;
+      soldier.traverse((c) => { c.castShadow = true; });
+      scene.add(soldier);
+    });
+
+    // Tanks and jets — real drivable vehicles (see makeTankMesh/makeJetMesh
+    // and the per-type speed handling in updateVehicle)
+    [[cx - 8, cz + 8], [cx + 8, cz + 8]].forEach((pos) => {
+      const mesh = makeTankMesh();
+      mesh.position.set(pos[0], 0, pos[1]);
+      scene.add(mesh);
+      vehicles.push({ mesh, x: pos[0], z: pos[1], heading: Math.PI, speed: 0, occupied: false, type: 'tank' });
+    });
+    [[cx - 8, cz - 8], [cx + 8, cz - 8]].forEach((pos) => {
+      const mesh = makeJetMesh();
+      mesh.position.set(pos[0], 0, pos[1]);
+      scene.add(mesh);
+      vehicles.push({ mesh, x: pos[0], z: pos[1], heading: Math.PI, speed: 0, occupied: false, type: 'jet' });
+    });
+
+    // Recruiter kiosk, just outside the gate on the city side
+    const kioskX = cx - halfSize - 9, kioskZ = cz;
+    const kiosk = new THREE.Mesh(new THREE.BoxGeometry(3, 2.4, 3), new THREE.MeshStandardMaterial({ color: 0x78716c }));
+    kiosk.position.set(kioskX, 1.2, kioskZ);
+    kiosk.castShadow = true;
+    scene.add(kiosk);
+    addFloatingSign(kioskX, 3.6, kioskZ, '🪖 GET A BASE JOB');
+    militaryBaseCenter.recruiter = { x: kioskX, z: kioskZ };
+  }
+
+  function makeTankMesh() {
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.75 });
+    const trackMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.8 });
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.9, 4.6), bodyMat);
+    hull.position.y = 0.75;
+    const turret = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1, 0.6, 10), bodyMat);
+    turret.position.y = 1.4;
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 2.4, 8), bodyMat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 1.4, 1.8);
+    [-1, 1].forEach((side) => {
+      const track = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.7, 4.8), trackMat);
+      track.position.set(side * 1.4, 0.45, 0);
+      group.add(track);
+    });
+    group.add(hull, turret, barrel);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function makeJetMesh() {
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.3 });
+    const accentMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.4 });
+    const fuselage = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 5.2, 10), bodyMat);
+    fuselage.rotation.x = Math.PI / 2;
+    fuselage.position.y = 0.9;
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.1, 10), bodyMat);
+    nose.rotation.x = -Math.PI / 2;
+    nose.position.set(0, 0.9, 2.9);
+    const wingGeo = new THREE.BoxGeometry(4.2, 0.1, 1.1);
+    const wing = new THREE.Mesh(wingGeo, bodyMat);
+    wing.position.set(0, 0.85, -0.2);
+    const tailFin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 1), accentMat);
+    tailFin.position.set(0, 1.4, -2.3);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.72, 5.3), accentMat);
+    stripe.position.y = 0.9;
+    stripe.scale.set(0.98, 0.3, 1);
+    group.add(fuselage, nose, wing, tailFin, stripe);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
   }
 
   function addFloatingSign(x, y, z, text) {
@@ -1525,11 +1670,14 @@
     showOverlay(mapOverlay);
   }
 
+  // Wider than the city grid alone so the military base (out past the
+  // east edge) still shows up on the full map instead of being clipped off.
+  const MAP_HALF = WORLD_HALF + 70;
+
   function worldToMapPx(x, z, size) {
-    const half = WORLD_HALF;
     return {
-      px: ((x + half) / (half * 2)) * size,
-      py: ((z + half) / (half * 2)) * size,
+      px: ((x + MAP_HALF) / (MAP_HALF * 2)) * size,
+      py: ((z + MAP_HALF) / (MAP_HALF * 2)) * size,
     };
   }
 
@@ -1580,6 +1728,12 @@
       mapCtx.fillText('🍕', p.px, p.py + 6);
     });
 
+    // military base
+    if (militaryBaseCenter) {
+      const p = worldToMapPx(militaryBaseCenter.x, militaryBaseCenter.z, size);
+      mapCtx.fillText('🪖', p.px, p.py + 6);
+    }
+
     // robots
     mapCtx.fillStyle = '#ef4444';
     robots.forEach((r) => {
@@ -1629,9 +1783,8 @@
     const scale = mapCanvas.width / rect.width;
     const px = (e.clientX - rect.left) * scale;
     const py = (e.clientY - rect.top) * scale;
-    const half = WORLD_HALF;
-    const wx = (px / mapCanvas.width) * (half * 2) - half;
-    const wz = (py / mapCanvas.height) * (half * 2) - half;
+    const wx = (px / mapCanvas.width) * (MAP_HALF * 2) - MAP_HALF;
+    const wz = (py / mapCanvas.height) * (MAP_HALF * 2) - MAP_HALF;
     state.waypoint = { x: wx, z: wz };
     $('waypoint-info').classList.remove('hidden');
     drawMap();
@@ -1724,6 +1877,12 @@
       miniCtx.textAlign = 'center';
       miniCtx.fillText('🍕', p.px, p.py + 4);
     });
+    if (militaryBaseCenter && Math.hypot(militaryBaseCenter.x - player.x, militaryBaseCenter.z - player.z) < MINI_RANGE) {
+      const p = toMini(militaryBaseCenter.x, militaryBaseCenter.z);
+      miniCtx.font = '13px sans-serif';
+      miniCtx.textAlign = 'center';
+      miniCtx.fillText('🪖', p.px, p.py + 4);
+    }
 
     // player arrow (always centered, points with heading) — same direct
     // forward-vector construction as drawMap(), see the comment there.
@@ -1828,6 +1987,14 @@
     }
     state.nearPizza = nearPizza;
 
+    // military base recruiter kiosk
+    let nearRecruiter = false;
+    if (!state.inVehicle && militaryBaseCenter && militaryBaseCenter.recruiter) {
+      const r = militaryBaseCenter.recruiter;
+      nearRecruiter = Math.hypot(r.x - player.x, r.z - player.z) < 8;
+    }
+    state.nearRecruiter = nearRecruiter;
+
     const promptEl = $('prompt-banner');
     if (state.inVehicle) {
       promptEl.textContent = 'Press 🚪 or E to exit the car';
@@ -1853,10 +2020,33 @@
       promptEl.textContent = locked ? '🍕 The oven is still going — check back soon' : 'Tap here to grab a cheese pizza 🍕';
       promptEl.classList.remove('hidden');
       promptEl.onclick = () => grabPizza(state.nearPizza);
+    } else if (state.nearRecruiter) {
+      promptEl.textContent = state.hasBaseAccess
+        ? '🪖 You already work here — the gate is open for you'
+        : 'Tap here to get a Military Base job ($1000) 🪖';
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = state.hasBaseAccess ? null : getMilitaryJob;
     } else {
       promptEl.classList.add('hidden');
       promptEl.onclick = null;
     }
+  }
+
+  function getMilitaryJob() {
+    if (state.hasBaseAccess) return;
+    const cost = 1000;
+    if (state.money < cost) { toast(`🪖 You need $${cost} for this job.`); return; }
+    state.money -= cost;
+    state.hasBaseAccess = true;
+    updateHUDMoney();
+    writeSave();
+    toast('🪖 You got the job! The gate will let you through now.', 3000);
+  }
+
+  function blockedByMilitaryGate(x, z) {
+    if (state.hasBaseAccess || !militaryGateBox) return false;
+    const g = militaryGateBox;
+    return x > g.minX && x < g.maxX && z > g.minZ && z < g.maxZ;
   }
 
   function grabPizza(place) {
@@ -1908,12 +2098,12 @@
       const speed = 6.2;
       const nx = player.x + Math.sin(player.heading) * speed * dt * Math.min(mag, 1);
       const nz = player.z + Math.cos(player.heading) * speed * dt * Math.min(mag, 1);
-      if (!collidesWithBuildings(nx, player.z, 0.6)) player.x = nx;
-      if (!collidesWithBuildings(player.x, nz, 0.6)) player.z = nz;
+      if (!collidesWithBuildings(nx, player.z, 0.6) && !blockedByMilitaryGate(nx, player.z)) player.x = nx;
+      if (!collidesWithBuildings(player.x, nz, 0.6) && !blockedByMilitaryGate(player.x, nz)) player.z = nz;
       player.bobPhase += dt * 10;
     }
 
-    const clampR = WORLD_HALF + BLOCK_SIZE / 2 - 2;
+    const clampR = worldClampR();
     player.x = Math.max(-clampR, Math.min(clampR, player.x));
     player.z = Math.max(-clampR, Math.min(clampR, player.z));
 
@@ -1936,8 +2126,10 @@
     // steered backwards — pressing right turned left and vice versa.
     let steer = -(input.moveX + kb.mx);
 
-    const maxSpeed = 18;
-    const accel = 14;
+    // Tanks are slower and heavier-feeling; jets are quick on the ground
+    // (no actual flight — see the chat for why that's out of scope).
+    const maxSpeed = v.type === 'tank' ? 10 : v.type === 'jet' ? 24 : 18;
+    const accel = v.type === 'tank' ? 8 : v.type === 'jet' ? 16 : 14;
     if (Math.abs(throttle) > 0.05) {
       v.speed += throttle * accel * dt;
     } else {
@@ -1951,12 +2143,31 @@
       v.heading += steer * 1.8 * dt * steerFactor;
     }
 
+    const preCrashSpeed = v.speed;
     const nx = v.x + Math.sin(v.heading) * v.speed * dt;
     const nz = v.z + Math.cos(v.heading) * v.speed * dt;
-    if (!collidesWithBuildings(nx, v.z, 1.4)) v.x = nx; else v.speed *= 0.4;
-    if (!collidesWithBuildings(v.x, nz, 1.4)) v.z = nz; else v.speed *= 0.4;
+    let hitWall = false;
+    if (!collidesWithBuildings(nx, v.z, 1.4) && !blockedByMilitaryGate(nx, v.z)) v.x = nx; else { v.speed *= 0.15; hitWall = true; }
+    if (!collidesWithBuildings(v.x, nz, 1.4) && !blockedByMilitaryGate(v.x, nz)) v.z = nz; else { v.speed *= 0.15; hitWall = true; }
+    if (hitWall && Math.abs(preCrashSpeed) > 6) triggerCrashFx(Math.abs(preCrashSpeed), v);
 
-    const clampR = WORLD_HALF + BLOCK_SIZE / 2 - 2;
+    // Cars used to just drive straight through each other — bump into one
+    // now and it stops you like any other obstacle (plus the same crash FX).
+    for (const other of vehicles) {
+      if (other === v) continue;
+      const dx = v.x - other.x, dz = v.z - other.z;
+      const dist = Math.hypot(dx, dz);
+      const minDist = 2.6;
+      if (dist > 0.001 && dist < minDist) {
+        const push = minDist - dist;
+        v.x += (dx / dist) * push;
+        v.z += (dz / dist) * push;
+        if (Math.abs(preCrashSpeed) > 5) triggerCrashFx(Math.abs(preCrashSpeed), v);
+        v.speed *= 0.15;
+      }
+    }
+
+    const clampR = worldClampR();
     v.x = Math.max(-clampR, Math.min(clampR, v.x));
     v.z = Math.max(-clampR, Math.min(clampR, v.z));
 
@@ -1965,7 +2176,7 @@
 
     player.x = v.x; player.z = v.z; player.heading = v.heading;
 
-    // wheel spin flavor omitted for simplicity
+    updateVehicleSmoke(v, dt);
 
     checkVehicleCollisions(v);
   }
@@ -2128,11 +2339,68 @@
     }
 
     const dist = state.inVehicle ? CAMERA_DIST + 2 : CAMERA_DIST;
-    const camX = player.x + Math.sin(cameraYaw) * dist * Math.cos(cameraPitch);
-    const camZ = player.z + Math.cos(cameraYaw) * dist * Math.cos(cameraPitch);
-    const camY = 2.2 + dist * Math.sin(cameraPitch);
+    let camX = player.x + Math.sin(cameraYaw) * dist * Math.cos(cameraPitch);
+    let camZ = player.z + Math.cos(cameraYaw) * dist * Math.cos(cameraPitch);
+    let camY = 2.2 + dist * Math.sin(cameraPitch);
+
+    if (crashShakeTime > 0) {
+      crashShakeTime = Math.max(0, crashShakeTime - dt);
+      const s = crashShakeMag * (crashShakeTime / 0.35);
+      camX += (Math.random() - 0.5) * s;
+      camY += (Math.random() - 0.5) * s;
+      camZ += (Math.random() - 0.5) * s;
+    }
+
     camera.position.set(camX, camY, camZ);
     camera.lookAt(player.x, 1.3, player.z);
+  }
+
+  // Ramming a building at speed now actually feels like a crash: a hard
+  // speed loss (see updateVehicle) plus a brief camera shake and a toast,
+  // instead of the car just silently stopping dead.
+  function triggerCrashFx(speed, v) {
+    crashShakeTime = 0.35;
+    crashShakeMag = Math.min(0.5, speed / 40);
+    const now = performance.now() / 1000;
+    if (now - lastCrashToastAt > 1) {
+      lastCrashToastAt = now;
+      toast('💥 Crash!', 1200);
+    }
+    if (v) {
+      v.smokingUntil = now + 6; // engine smokes for a while after a hard hit
+      v.lastSmokeAt = 0;
+    }
+  }
+
+  function spawnSmokePuff(v) {
+    const frontX = v.x + Math.sin(v.heading) * 2.1;
+    const frontZ = v.z + Math.cos(v.heading) * 2.1;
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0x4b5563, transparent: true, opacity: 0.55 })
+    );
+    puff.position.set(frontX + (Math.random() - 0.5) * 0.4, 0.65 + Math.random() * 0.25, frontZ + (Math.random() - 0.5) * 0.4);
+    scene.add(puff);
+    const start = performance.now();
+    function anim() {
+      const t = (performance.now() - start) / 900;
+      if (t >= 1) { scene.remove(puff); puff.geometry.dispose(); puff.material.dispose(); return; }
+      puff.position.y += 0.012;
+      const s = 1 + t * 1.8;
+      puff.scale.set(s, s, s);
+      puff.material.opacity = 0.55 * (1 - t);
+      requestAnimationFrame(anim);
+    }
+    anim();
+  }
+
+  function updateVehicleSmoke(v) {
+    const now = performance.now() / 1000;
+    if (!v.smokingUntil || now > v.smokingUntil) return;
+    if (now - (v.lastSmokeAt || 0) > 0.16) {
+      v.lastSmokeAt = now;
+      spawnSmokePuff(v);
+    }
   }
 
   function loop() {
@@ -2166,9 +2434,12 @@
     get pedestrians() { return pedestrians; },
     get banks() { return banks; },
     get pizzaPlaces() { return pizzaPlaces; },
+    get militaryBaseCenter() { return militaryBaseCenter; },
+    get militaryGateBox() { return militaryGateBox; },
+    get buildingBoxes() { return buildingBoxes; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
-    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, CONTACTS, WEAPONS,
+    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate, CONTACTS, WEAPONS,
   };
 
 })();
