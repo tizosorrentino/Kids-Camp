@@ -535,6 +535,7 @@
   const CITY_BLOCKS = 6;          // grid of blocks per axis
   const BLOCK_SIZE = 42;          // block footprint including road
   const ROAD_WIDTH = 12;
+  const SIDEWALK_WIDTH = 3;
   const BUILDING_MARGIN = 3;
   const WORLD_HALF = (CITY_BLOCKS * BLOCK_SIZE) / 2;
 
@@ -688,6 +689,10 @@
   function buildCity() {
     const roadMat = new THREE.MeshStandardMaterial({ color: 0x2b2f36 });
     const roadGeo = new THREE.PlaneGeometry(WORLD_HALF * 2 + BLOCK_SIZE, ROAD_WIDTH);
+    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.95 });
+    const sidewalkLen = WORLD_HALF * 2 + BLOCK_SIZE;
+    const sidewalkGeo = new THREE.PlaneGeometry(sidewalkLen, SIDEWALK_WIDTH);
+    const sidewalkOffset = ROAD_WIDTH / 2 + SIDEWALK_WIDTH / 2;
     for (let i = 0; i <= CITY_BLOCKS; i++) {
       const z = -WORLD_HALF + i * BLOCK_SIZE;
       const roadH = new THREE.Mesh(roadGeo, roadMat);
@@ -696,12 +701,31 @@
       roadH.receiveShadow = true;
       scene.add(roadH);
 
+      // Sidewalks flank each road on both sides — pedestrians/robots walk
+      // here (see isOnRoad()), never in the street itself.
+      [-1, 1].forEach((side) => {
+        const sw = new THREE.Mesh(sidewalkGeo, sidewalkMat);
+        sw.rotation.x = -Math.PI / 2;
+        sw.position.set(0, 0.008, z + side * sidewalkOffset);
+        sw.receiveShadow = true;
+        scene.add(sw);
+      });
+
       const roadV = new THREE.Mesh(roadGeo, roadMat);
       roadV.rotation.x = -Math.PI / 2;
       roadV.rotation.z = Math.PI / 2;
       roadV.position.set(z, 0.01, 0);
       roadV.receiveShadow = true;
       scene.add(roadV);
+
+      [-1, 1].forEach((side) => {
+        const sw = new THREE.Mesh(sidewalkGeo, sidewalkMat);
+        sw.rotation.x = -Math.PI / 2;
+        sw.rotation.z = Math.PI / 2;
+        sw.position.set(z + side * sidewalkOffset, 0.008, 0);
+        sw.receiveShadow = true;
+        scene.add(sw);
+      });
     }
 
     const buildingPalette = [0xd6d3d1, 0xfca5a5, 0xfcd34d, 0x93c5fd, 0xc4b5fd, 0xa7f3d0, 0xf9a8d4];
@@ -841,6 +865,17 @@
     return { x: 0, z: 6 };
   }
 
+  // Same, but also avoids the street — for spawning pedestrians/robots so
+  // they start on a sidewalk instead of in traffic.
+  function randomSidewalkSpot(margin) {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const x = (Math.random() * 2 - 1) * (WORLD_HALF - 6);
+      const z = (Math.random() * 2 - 1) * (WORLD_HALF - 6);
+      if (!collidesWithBuildings(x, z, margin || 1.2) && !isOnRoad(x, z)) return { x, z };
+    }
+    return { x: ROAD_WIDTH / 2 + SIDEWALK_WIDTH / 2, z: 18 }; // dead center of a sidewalk strip, well clear of any road line
+  }
+
   // Same idea, but biased to land within `radius` of (cx,cz) — used to
   // guarantee a few cars/pedestrians spawn visibly near the player's start
   // instead of only ever scattered randomly across the whole city.
@@ -858,6 +893,20 @@
       if (x > b.minX - margin && x < b.maxX + margin && z > b.minZ - margin && z < b.maxZ + margin) return true;
     }
     return false;
+  }
+
+  // Distance from a single coordinate to the nearest road centerline
+  // (roads run along both axes at every BLOCK_SIZE interval).
+  function distToNearestRoadLine(coord) {
+    const rel = ((coord + WORLD_HALF) % BLOCK_SIZE + BLOCK_SIZE) % BLOCK_SIZE;
+    return Math.min(rel, BLOCK_SIZE - rel);
+  }
+
+  // True if (x,z) falls inside a road strip (either axis) — used to keep
+  // pedestrians and robots walking on the sidewalk instead of the street.
+  function isOnRoad(x, z, margin) {
+    const half = ROAD_WIDTH / 2 + (margin || 0);
+    return distToNearestRoadLine(x) < half || distToNearestRoadLine(z) < half;
   }
 
   // ------------------------------------------------------------
@@ -912,11 +961,32 @@
     return group;
   }
 
+  // A random point ON a road, with a heading aligned to that road's axis
+  // and offset toward one "lane" — NPC-driven cars only ever spawn (and
+  // stay) on the street, never the grass/sidewalks.
+  function randomRoadSpot() {
+    const axis = Math.random() < 0.5 ? 'h' : 'v';
+    const lineIndex = Math.floor(Math.random() * (CITY_BLOCKS + 1));
+    const line = -WORLD_HALF + lineIndex * BLOCK_SIZE;
+    const along = (Math.random() * 2 - 1) * (WORLD_HALF - 4);
+    const laneOffset = (Math.random() < 0.5 ? -1 : 1) * (ROAD_WIDTH / 4);
+    if (axis === 'h') {
+      return { x: along, z: line + laneOffset, heading: Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2 };
+    }
+    return { x: line + laneOffset, z: along, heading: Math.random() < 0.5 ? 0 : Math.PI };
+  }
+
   function spawnVehicles() {
     const count = 26;
     const nearSpawnCount = 4; // guarantees cars are visible right at the start, not just scattered far away
     for (let i = 0; i < count; i++) {
-      const spot = i < nearSpawnCount ? randomOpenSpotNear(4, 10, 22, 3) : randomOpenSpot(3);
+      const occupied = i % 2 === 0;
+      // Occupied cars are the ones with an NPC driver actually cruising
+      // the streets, so they need to start ON a road; parked cars can sit
+      // anywhere open (like curbside parking).
+      const spot = occupied
+        ? randomRoadSpot()
+        : (i < nearSpawnCount ? randomOpenSpotNear(4, 10, 22, 3) : randomOpenSpot(3));
       const color = CAR_COLORS[i % CAR_COLORS.length];
       const mesh = makeCarMesh(color);
       mesh.position.set(spot.x, 0, spot.z);
@@ -925,8 +995,8 @@
       // hop in and that driver bails, handing you the car (see
       // tryEnterExitVehicle). The rest sit parked, free to just take.
       vehicles.push({
-        mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, speed: 0,
-        occupied: i % 2 === 0, wanderTimer: Math.random() * 3,
+        mesh, x: spot.x, z: spot.z, heading: spot.heading !== undefined ? spot.heading : Math.random() * Math.PI * 2, speed: 0,
+        occupied, decidedAtIntersection: false,
       });
     }
   }
@@ -955,7 +1025,7 @@
 
   function spawnRobots() {
     for (let i = 0; i < 14; i++) {
-      const spot = randomOpenSpot(2);
+      const spot = randomSidewalkSpot(2);
       const mesh = makeRobotMesh();
       mesh.position.set(spot.x, 0, spot.z);
       scene.add(mesh);
@@ -986,7 +1056,7 @@
 
   function spawnPedestrians() {
     for (let i = 0; i < 10; i++) {
-      const spot = randomOpenSpot(2);
+      const spot = randomSidewalkSpot(2);
       const mesh = makePedestrianMesh();
       mesh.position.set(spot.x, 0, spot.z);
       scene.add(mesh);
@@ -1265,7 +1335,7 @@
         if (idx >= 0) robots.splice(idx, 1);
         // respawn a fresh robot elsewhere after a delay
         setTimeout(() => {
-          const spot = randomOpenSpot(2);
+          const spot = randomSidewalkSpot(2);
           const mesh = makeRobotMesh();
           mesh.position.set(spot.x, 0, spot.z);
           scene.add(mesh);
@@ -1860,7 +1930,11 @@
     const v = state.inVehicle;
     const kb = keyboardMove();
     let throttle = -(input.moveY) - kb.my; // forward is negative Y
-    let steer = input.moveX + kb.mx;
+    // Negated for the same reason as the walking fix: increasing heading
+    // turns the car toward world +X, which is screen-LEFT (verified via
+    // the camera's actual right vector), so un-negated input.moveX/kb.mx
+    // steered backwards — pressing right turned left and vice versa.
+    let steer = -(input.moveX + kb.mx);
 
     const maxSpeed = 18;
     const accel = 14;
@@ -1892,24 +1966,63 @@
     player.x = v.x; player.z = v.z; player.heading = v.heading;
 
     // wheel spin flavor omitted for simplicity
+
+    checkVehicleCollisions(v);
   }
 
+  // Hitting a robot with the car takes it down just like a blaster hit
+  // (same reward/respawn flow) — a fun vehicular takedown of the
+  // mechanical enemies. Hitting a pedestrian only startles them (same
+  // non-lethal flee reaction as a blaster splash) — no damage, no death.
+  function checkVehicleCollisions(v) {
+    if (Math.abs(v.speed) < 2) return;
+    for (const bot of robots) {
+      if (!bot.alive) continue;
+      if (Math.hypot(bot.x - v.x, bot.z - v.z) < 1.8) applyDamageToRobot(bot, 999);
+    }
+    for (const ped of pedestrians) {
+      if (Math.hypot(ped.x - v.x, ped.z - v.z) < 1.6) bumpPedestrian(ped);
+    }
+  }
+
+  function bumpPedestrian(ped) {
+    if (!ped.fleeing) toast('🚗 Beep! They jumped out of the way.', 1400);
+    ped.fleeing = true;
+  }
+
+  // NPC-driven traffic follows the road grid: drive straight until an
+  // intersection, then randomly go straight/turn (always snapped to the
+  // grid's axis-aligned directions) — unlike the player, these cars never
+  // leave the street for the grass or sidewalks.
   function updateOtherVehicles(dt) {
+    const halfRoad = ROAD_WIDTH / 2;
     vehicles.forEach((v) => {
       if (v === state.inVehicle || !v.occupied) return;
-      // Simple traffic AI: cruise forward, turn randomly every few seconds
-      // or whenever a building blocks the way — same wander pattern as
-      // pedestrians/robots, just faster and steadier.
-      v.wanderTimer -= dt;
-      if (v.wanderTimer <= 0) {
-        v.wanderTimer = 3 + Math.random() * 4;
-        v.heading += (Math.random() - 0.5) * 1.2;
+
+      const atIntersection = distToNearestRoadLine(v.x) < halfRoad && distToNearestRoadLine(v.z) < halfRoad;
+      if (atIntersection) {
+        if (!v.decidedAtIntersection) {
+          v.decidedAtIntersection = true;
+          const choice = Math.random();
+          if (choice < 0.775) v.heading += choice < 0.55 ? 0 : Math.PI / 2;
+          else v.heading -= Math.PI / 2;
+          v.heading = Math.round(v.heading / (Math.PI / 2)) * (Math.PI / 2); // snap to the grid
+        }
+      } else {
+        v.decidedAtIntersection = false;
       }
+
       const speed = 5;
       const nx = v.x + Math.sin(v.heading) * speed * dt;
       const nz = v.z + Math.cos(v.heading) * speed * dt;
-      if (!collidesWithBuildings(nx, nz, 1.4)) { v.x = nx; v.z = nz; }
-      else v.heading += Math.PI * 0.5;
+      if (!collidesWithBuildings(nx, nz, 1.4) && isOnRoad(nx, nz, 0.5)) {
+        v.x = nx; v.z = nz;
+      } else {
+        // Shouldn't normally happen given the grid-snapped turns above, but
+        // as a safety net (e.g. right after spawn) just try a new heading
+        // rather than drifting onto the grass.
+        v.heading += Math.PI / 2;
+      }
       v.mesh.position.set(v.x, 0, v.z);
       v.mesh.rotation.y = v.heading;
     });
@@ -1936,7 +2049,7 @@
         const speed = 1.4;
         const nx = bot.x + Math.sin(bot.heading) * speed * dt;
         const nz = bot.z + Math.cos(bot.heading) * speed * dt;
-        if (!collidesWithBuildings(nx, nz, 1)) { bot.x = nx; bot.z = nz; }
+        if (!collidesWithBuildings(nx, nz, 1) && !isOnRoad(nx, nz)) { bot.x = nx; bot.z = nz; }
         else bot.heading += Math.PI * 0.5;
       }
       bot.mesh.position.set(bot.x, 0, bot.z);
@@ -1967,7 +2080,7 @@
         const speed = 1.1;
         const nx = p.x + Math.sin(p.heading) * speed * dt;
         const nz = p.z + Math.cos(p.heading) * speed * dt;
-        if (!collidesWithBuildings(nx, nz, 1)) { p.x = nx; p.z = nz; }
+        if (!collidesWithBuildings(nx, nz, 1) && !isOnRoad(nx, nz)) { p.x = nx; p.z = nz; }
         else p.heading += Math.PI * 0.5;
       }
       p.mesh.position.set(p.x, 0, p.z);
