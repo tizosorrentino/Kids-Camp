@@ -75,6 +75,7 @@
     mission: null,  // {type, targetId?, marker:{x,z}, reward, progress, needed}
     nearShop: false,
     nearVehicle: null,
+    nearBank: null,
     lastShotTime: 0,
   };
 
@@ -351,11 +352,14 @@
       // Dome extends a bit past its equator (thetaLength > PI/2) so it hugs
       // down over the sides of the head instead of floating above it — the
       // rim then lands right where the brim attaches, with no bald gap.
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62), capMat);
-      dome.position.set(0, 1.79, 0);
+      // Both are raised to sit above eye height (eyes are at y=1.71) so the
+      // brim shades from the brow line down, like a real cap, instead of
+      // covering the eyes themselves.
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.58), capMat);
+      dome.position.set(0, 1.83, 0);
       const brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.035, 0.24), capMat);
-      brim.position.set(0, 1.685, 0.235);
-      brim.rotation.x = -0.1;
+      brim.position.set(0, 1.755, 0.24);
+      brim.rotation.x = -0.12;
       group.add(dome, brim);
     } else if (cfg.hat === 'helmet') {
       const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.4, roughness: 0.3 }));
@@ -532,9 +536,10 @@
   let robots = [];
   let pedestrians = [];
   let coins = [];
+  let banks = []; // {x, z, cooldownUntil}
   let shopMarkerPos = null;
   let gameStarted = false;
-  let cameraYaw = 0;
+  let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
   let cameraPitch = 0.28;
   const CAMERA_DIST = 7.5;
 
@@ -689,7 +694,11 @@
     }
 
     const buildingPalette = [0xd6d3d1, 0xfca5a5, 0xfcd34d, 0x93c5fd, 0xc4b5fd, 0xa7f3d0, 0xf9a8d4];
-    let shopPlaced = false;
+    const mid = Math.floor(CITY_BLOCKS / 2);
+    const bankSpots = [
+      { bx: mid - 2, bz: mid - 2 },
+      { bx: Math.min(CITY_BLOCKS - 1, mid + 1), bz: Math.min(CITY_BLOCKS - 1, mid + 2) },
+    ];
 
     for (let bx = 0; bx < CITY_BLOCKS; bx++) {
       for (let bz = 0; bz < CITY_BLOCKS; bz++) {
@@ -697,13 +706,10 @@
         const cz = -WORLD_HALF + BLOCK_SIZE * bz + BLOCK_SIZE / 2;
         const footprint = BLOCK_SIZE - ROAD_WIDTH - BUILDING_MARGIN * 2;
 
-        // Leave a few open blocks as parks/plazas for variety
-        if (Math.random() < 0.12) continue;
-
-        const isShopBlock = !shopPlaced && bx === Math.floor(CITY_BLOCKS / 2) && bz === Math.floor(CITY_BLOCKS / 2);
+        const isShopBlock = !shopMarkerPos && bx === mid && bz === mid;
+        const bankSpot = bankSpots.find((b) => b.bx === bx && b.bz === bz && b.bx !== mid);
 
         if (isShopBlock) {
-          shopPlaced = true;
           const w = footprint * 0.8, d = footprint * 0.8, h = 8;
           const mat = makeBuildingMaterials(0x0ea5e9, w, h, d, { winScale: 0.78, litChance: 0.7 });
           const shop = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -716,6 +722,24 @@
           shopMarkerPos = { x: cx, z: cz };
           continue;
         }
+
+        if (bankSpot) {
+          const w = footprint * 0.75, d = footprint * 0.75, h = 9;
+          const mat = makeBuildingMaterials(0x15803d, w, h, d, { winScale: 0.7, litChance: 0.5 });
+          const bank = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+          bank.position.set(cx, h / 2, cz);
+          bank.castShadow = true;
+          bank.receiveShadow = true;
+          scene.add(bank);
+          addFloatingSign(cx, h + 1.6, cz, '🏦 BANK');
+          buildingBoxes.push(boxOf(cx, cz, w, d));
+          banks.push({ x: cx, z: cz, cooldownUntil: 0 });
+          continue;
+        }
+
+        // Leave a few open blocks as parks/plazas for variety (only ordinary
+        // blocks — the shop and banks above are always placed)
+        if (Math.random() < 0.12) continue;
 
         // 1-3 smaller buildings per block for a denser city feel
         const count = 1 + Math.floor(Math.random() * 2);
@@ -855,8 +879,12 @@
       const mesh = makeCarMesh(color);
       mesh.position.set(spot.x, 0, spot.z);
       scene.add(mesh);
+      // Roughly half the cars already have a driver cruising the streets —
+      // hop in and that driver bails, handing you the car (see
+      // tryEnterExitVehicle). The rest sit parked, free to just take.
       vehicles.push({
         mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, speed: 0,
+        occupied: i % 2 === 0, wanderTimer: Math.random() * 3,
       });
     }
   }
@@ -916,8 +944,21 @@
       const mesh = makePedestrianMesh();
       mesh.position.set(spot.x, 0, spot.z);
       scene.add(mesh);
-      pedestrians.push({ mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, wanderTimer: Math.random() * 3 });
+      pedestrians.push({ mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, wanderTimer: Math.random() * 3, fleeing: false });
     }
+  }
+
+  // Spawns a one-off pedestrian who immediately runs off — used when the
+  // player carjacks an occupied vehicle, so "taking" a car has a visible
+  // (harmless, comedic) consequence instead of the driver just vanishing.
+  function spawnFleeingBystander(x, z, heading) {
+    const mesh = makePedestrianMesh();
+    const sideStep = (heading || 0) + Math.PI / 2;
+    const sx = x + Math.sin(sideStep) * 1.6;
+    const sz = z + Math.cos(sideStep) * 1.6;
+    mesh.position.set(sx, 0, sz);
+    scene.add(mesh);
+    pedestrians.push({ mesh, x: sx, z: sz, heading: Math.random() * Math.PI * 2, wanderTimer: 999, fleeing: true });
   }
 
   // ------------------------------------------------------------
@@ -1102,10 +1143,29 @@
         hitSomething = true;
       }
     }
+    for (const ped of pedestrians) {
+      const dx = ped.x - originX, dz = ped.z - originZ;
+      const dist = Math.hypot(dx, dz);
+      if (dist > w.range) continue;
+      const angleTo = Math.atan2(dx, dz);
+      let diff = angleTo - player.heading;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      if (Math.abs(diff) < 0.35) {
+        splashPedestrian(ped);
+        hitSomething = true;
+      }
+    }
     spawnBlasterFX(originX, originZ, player.heading);
     if (!hitSomething) {
       // small chance friendly flavor text if aimed at pedestrian
     }
+  }
+
+  // Getting splashed is just a startle, not a "hit" — no damage, no reward,
+  // no removal. They yelp, dash off for a bit, then go back to wandering.
+  function splashPedestrian(ped) {
+    if (!ped.fleeing) toast('💦 Splash! They ran off.', 1400);
+    ped.fleeing = true;
   }
 
   function spawnBlasterFX(x, z, heading) {
@@ -1377,6 +1437,14 @@
       mapCtx.fillText('💦', p.px, p.py + 6);
     }
 
+    // banks
+    mapCtx.font = '20px sans-serif';
+    mapCtx.textAlign = 'center';
+    banks.forEach((bank) => {
+      const p = worldToMapPx(bank.x, bank.z, size);
+      mapCtx.fillText('🏦', p.px, p.py + 6);
+    });
+
     // robots
     mapCtx.fillStyle = '#ef4444';
     robots.forEach((r) => {
@@ -1481,11 +1549,11 @@
       miniCtx.beginPath(); miniCtx.arc(p.px, p.py, 3, 0, Math.PI * 2); miniCtx.fill();
     });
 
-    miniCtx.fillStyle = '#94a3b8';
     vehicles.forEach((v) => {
       if (state.inVehicle === v) return;
       if (Math.hypot(v.x - player.x, v.z - player.z) > MINI_RANGE) return;
       const p = toMini(v.x, v.z);
+      miniCtx.fillStyle = v.occupied ? '#fbbf24' : '#94a3b8';
       miniCtx.fillRect(p.px - 2, p.py - 2, 4, 4);
     });
 
@@ -1504,6 +1572,13 @@
       miniCtx.textAlign = 'center';
       miniCtx.fillText('💦', p.px, p.py + 4);
     }
+    banks.forEach((bank) => {
+      if (Math.hypot(bank.x - player.x, bank.z - player.z) > MINI_RANGE) return;
+      const p = toMini(bank.x, bank.z);
+      miniCtx.font = '13px sans-serif';
+      miniCtx.textAlign = 'center';
+      miniCtx.fillText('🏦', p.px, p.py + 4);
+    });
 
     // player arrow (always centered, points with heading)
     miniCtx.save();
@@ -1550,9 +1625,17 @@
       state.inVehicle = null;
       toast('🚪 You got out of the car.');
     } else if (state.nearVehicle) {
-      state.inVehicle = state.nearVehicle;
+      const v = state.nearVehicle;
+      if (v.occupied) {
+        v.occupied = false;
+        v.speed = 0;
+        spawnFleeingBystander(v.x, v.z, v.heading);
+        toast('🚗 You hopped in — the driver ran off!', 2200);
+      } else {
+        toast('🚗 Vroom! GPS route active — check your minimap.', 2200);
+      }
+      state.inVehicle = v;
       playerMesh.visible = false;
-      toast('🚗 Vroom! GPS route active — check your minimap.', 2200);
     }
   }
 
@@ -1572,21 +1655,54 @@
     }
     state.nearShop = nearShop;
 
+    // nearest bank
+    let nearBank = null, nearBankDist = 10;
+    if (!state.inVehicle) {
+      for (const bank of banks) {
+        const d = Math.hypot(bank.x - player.x, bank.z - player.z);
+        if (d < nearBankDist) { nearBank = bank; nearBankDist = d; }
+      }
+    }
+    state.nearBank = nearBank;
+
     const promptEl = $('prompt-banner');
     if (state.inVehicle) {
       promptEl.textContent = 'Press 🚪 or E to exit the car';
       promptEl.classList.remove('hidden');
+      promptEl.onclick = null;
     } else if (state.nearVehicle) {
-      promptEl.textContent = 'Press 🚪 or E to enter the car';
+      promptEl.textContent = state.nearVehicle.occupied
+        ? 'Press 🚪 or E to take this car (driver will run off)'
+        : 'Press 🚪 or E to enter the car';
       promptEl.classList.remove('hidden');
+      promptEl.onclick = null;
     } else if (state.nearShop) {
       promptEl.textContent = 'Tap here to open the Blaster Shop 💦';
       promptEl.classList.remove('hidden');
       promptEl.onclick = openShop;
+    } else if (state.nearBank) {
+      const locked = performance.now() / 1000 < state.nearBank.cooldownUntil;
+      promptEl.textContent = locked ? '🏦 Vault is locked — check back soon' : 'Tap here to crack the bank vault 🏦';
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = () => robBank(state.nearBank);
     } else {
       promptEl.classList.add('hidden');
       promptEl.onclick = null;
     }
+  }
+
+  function robBank(bank) {
+    const now = performance.now() / 1000;
+    if (now < bank.cooldownUntil) {
+      toast('🏦 The vault is still locked. Try again later!');
+      return;
+    }
+    const reward = 400 + Math.floor(Math.random() * 300);
+    bank.cooldownUntil = now + 60;
+    state.money += reward;
+    updateHUDMoney();
+    writeSave();
+    toast(`🏦 Vault cracked! +$${reward}`, 3000);
   }
 
   // ==============================================================
@@ -1600,8 +1716,12 @@
     player.walking = mag > 0.05;
 
     if (player.walking) {
-      const targetHeading = Math.atan2(mx, -my);
-      player.heading = targetHeading;
+      // Movement is relative to where the camera is currently looking, so
+      // pushing "forward" always walks into the screen — not some fixed
+      // world direction left over from before you last dragged to look
+      // around.
+      const inputAngle = Math.atan2(mx, -my);
+      player.heading = cameraYaw + Math.PI + inputAngle;
       const speed = 6.2;
       const nx = player.x + Math.sin(player.heading) * speed * dt * Math.min(mag, 1);
       const nz = player.z + Math.cos(player.heading) * speed * dt * Math.min(mag, 1);
@@ -1663,8 +1783,22 @@
 
   function updateOtherVehicles(dt) {
     vehicles.forEach((v) => {
-      if (v === state.inVehicle) return;
-      // gentle idle sway animation only (parked cars); keeps scene lively without complex traffic AI
+      if (v === state.inVehicle || !v.occupied) return;
+      // Simple traffic AI: cruise forward, turn randomly every few seconds
+      // or whenever a building blocks the way — same wander pattern as
+      // pedestrians/robots, just faster and steadier.
+      v.wanderTimer -= dt;
+      if (v.wanderTimer <= 0) {
+        v.wanderTimer = 3 + Math.random() * 4;
+        v.heading += (Math.random() - 0.5) * 1.2;
+      }
+      const speed = 5;
+      const nx = v.x + Math.sin(v.heading) * speed * dt;
+      const nz = v.z + Math.cos(v.heading) * speed * dt;
+      if (!collidesWithBuildings(nx, nz, 1.4)) { v.x = nx; v.z = nz; }
+      else v.heading += Math.PI * 0.5;
+      v.mesh.position.set(v.x, 0, v.z);
+      v.mesh.rotation.y = v.heading;
     });
   }
 
@@ -1702,16 +1836,27 @@
 
   function updatePedestrians(dt) {
     pedestrians.forEach((p) => {
-      p.wanderTimer -= dt;
-      if (p.wanderTimer <= 0) {
-        p.wanderTimer = 2 + Math.random() * 4;
-        p.heading += (Math.random() - 0.5) * 1.6;
+      if (p.fleeing) {
+        const dx = p.x - player.x, dz = p.z - player.z;
+        const dist = Math.hypot(dx, dz) || 1;
+        const speed = 3.6;
+        const nx = p.x + (dx / dist) * speed * dt;
+        const nz = p.z + (dz / dist) * speed * dt;
+        if (!collidesWithBuildings(nx, nz, 1)) { p.x = nx; p.z = nz; }
+        p.heading = Math.atan2(dx, dz);
+        if (dist > 22) { p.fleeing = false; p.wanderTimer = 1; }
+      } else {
+        p.wanderTimer -= dt;
+        if (p.wanderTimer <= 0) {
+          p.wanderTimer = 2 + Math.random() * 4;
+          p.heading += (Math.random() - 0.5) * 1.6;
+        }
+        const speed = 1.1;
+        const nx = p.x + Math.sin(p.heading) * speed * dt;
+        const nz = p.z + Math.cos(p.heading) * speed * dt;
+        if (!collidesWithBuildings(nx, nz, 1)) { p.x = nx; p.z = nz; }
+        else p.heading += Math.PI * 0.5;
       }
-      const speed = 1.1;
-      const nx = p.x + Math.sin(p.heading) * speed * dt;
-      const nz = p.z + Math.cos(p.heading) * speed * dt;
-      if (!collidesWithBuildings(nx, nz, 1)) { p.x = nx; p.z = nz; }
-      else p.heading += Math.PI * 0.5;
       p.mesh.position.set(p.x, 0, p.z);
       p.mesh.rotation.y = p.heading;
     });
@@ -1743,11 +1888,18 @@
     cameraPitch = Math.max(0.08, Math.min(0.75, cameraPitch));
     lookDeltaX = 0; lookDeltaY = 0;
 
-    // If not actively looking, slowly settle camera behind player heading
-    const behind = player.heading + Math.PI;
-    let diff = behind - cameraYaw;
-    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-    cameraYaw += diff * Math.min(1, dt * 2.2);
+    // While driving, the car's heading is set directly by steering (not by
+    // camera angle), so it's safe to auto-swing the camera to stay behind
+    // it. While walking, player.heading is itself derived FROM cameraYaw
+    // (see updatePlayerWalking) — auto-chasing here too would feed back
+    // into a runaway spin whenever a turn/strafe key is held, so on foot
+    // the camera only turns from an explicit look-drag.
+    if (state.inVehicle) {
+      const behind = player.heading + Math.PI;
+      let diff = behind - cameraYaw;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      cameraYaw += diff * Math.min(1, dt * 2.2);
+    }
 
     const dist = state.inVehicle ? CAMERA_DIST + 2 : CAMERA_DIST;
     const camX = player.x + Math.sin(cameraYaw) * dist * Math.cos(cameraPitch);
@@ -1784,7 +1936,11 @@
     get player() { return player; },
     get vehicles() { return vehicles; },
     get robots() { return robots; },
-    fireWeapon, tryEnterExitVehicle, startMission, openShop, CONTACTS, WEAPONS,
+    get pedestrians() { return pedestrians; },
+    get banks() { return banks; },
+    get cameraYaw() { return cameraYaw; },
+    set cameraYaw(v) { cameraYaw = v; },
+    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, CONTACTS, WEAPONS,
   };
 
 })();
