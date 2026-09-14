@@ -347,19 +347,37 @@
 
     // Hat
     if (cfg.hat === 'cap') {
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
-      cap.position.set(0, 1.78, 0);
-      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
-      brim.position.set(0, 1.68, 0.14);
-      group.add(cap, brim);
+      const capMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.6 });
+      // Dome extends a bit past its equator (thetaLength > PI/2) so it hugs
+      // down over the sides of the head instead of floating above it — the
+      // rim then lands right where the brim attaches, with no bald gap.
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62), capMat);
+      dome.position.set(0, 1.79, 0);
+      const brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.035, 0.24), capMat);
+      brim.position.set(0, 1.685, 0.235);
+      brim.rotation.x = -0.1;
+      group.add(dome, brim);
     } else if (cfg.hat === 'helmet') {
       const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.4, roughness: 0.3 }));
       helmet.position.set(0, 1.70, 0);
       group.add(helmet);
     } else if (cfg.hat === 'crown') {
-      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.18, 8), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.6, roughness: 0.2 }));
-      crown.position.set(0, 1.92, 0);
-      group.add(crown);
+      const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.75, roughness: 0.25 });
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, 0.11, 12), goldMat);
+      band.position.set(0, 1.87, 0);
+      group.add(band);
+
+      const jewelColors = [0xef4444, 0x3b82f6, 0x22c55e, 0xef4444, 0x3b82f6];
+      const spikeCount = 5;
+      for (let i = 0; i < spikeCount; i++) {
+        const angle = (i / spikeCount) * Math.PI * 2;
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.13, 8), goldMat);
+        spike.position.set(Math.cos(angle) * 0.19, 1.99, Math.sin(angle) * 0.19);
+        group.add(spike);
+        const jewel = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), new THREE.MeshStandardMaterial({ color: jewelColors[i], roughness: 0.25 }));
+        jewel.position.set(Math.cos(angle) * 0.24, 1.87, Math.sin(angle) * 0.24);
+        group.add(jewel);
+      }
     }
 
     // Accessory
