@@ -1,6 +1,7 @@
 <title>Blaster City 3D</title>
 <link rel="stylesheet" href="style.css">
 
+
 <div id="app">
 
   <!-- 3D canvas goes here -->
@@ -88,7 +89,13 @@
       </div>
     </div>
 
-    <div id="look-zone"></div>
+    <div id="look-zone">
+      <div id="look-hint">👀 Drag here to look up/down/around</div>
+    </div>
+
+    <div id="crosshair" class="hidden">
+      <div id="crosshair-dot"></div>
+    </div>
 
     <div id="controls-hint">
       WASD/Arrows: Move &nbsp;|&nbsp; Drag right side: Look &nbsp;|&nbsp; E: Enter/Exit &nbsp;|&nbsp; Click/Space: Fire &nbsp;|&nbsp; 1-5: Weapons

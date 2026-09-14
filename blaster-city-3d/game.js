@@ -46,8 +46,12 @@
   const SKIN_TONES = [0xffdbb4, 0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0x5a3825];
   const SHIRT_COLORS = [0xef4444, 0x3b82f6, 0x22c55e, 0xf59e0b, 0xa855f7, 0x111827, 0xec4899, 0xffffff];
   const PANTS_COLORS = [0x1f2937, 0x334155, 0x4b5563, 0x0f172a, 0x78350f, 0x164e63];
+  const HAIR_COLORS = [0x1c1310, 0x3b2415, 0x6b4226, 0xb8860b, 0xe8c15a, 0xc0c0c0, 0xe11d48, 0x2563eb];
   const HATS = ['none', 'cap', 'helmet', 'crown'];
-  const ACCESSORIES = ['none', 'backpack', 'cape', 'wings'];
+  const ACCESSORIES = ['none', 'backpack', 'cape', 'wings', 'chain'];
+  const HAIR_STYLES = ['none', 'short', 'afro', 'mohawk'];
+  const TOPS = ['shirt', 'jacket', 'sweatshirt'];
+  const BOTTOMS = ['pants', 'shorts'];
 
   const CONTACTS = [
     { id: 'pete', name: 'Pizza Pete', icon: '🍕', line: 'Deliver a pizza across town before it gets cold!', mission: 'DELIVERY', reward: [120, 200] },
@@ -68,6 +72,10 @@
       pants: PANTS_COLORS[0],
       hat: 'none',
       accessory: 'none',
+      hairStyle: 'short',
+      hairColor: HAIR_COLORS[1],
+      top: 'shirt',
+      bottom: 'pants',
     },
     health: 100,
     inVehicle: null,
@@ -76,6 +84,7 @@
     nearShop: false,
     nearVehicle: null,
     nearBank: null,
+    nearPizza: null,
     lastShotTime: 0,
   };
 
@@ -185,10 +194,14 @@
   function renderCustomizeOptions() {
     customizeOptionsEl.innerHTML = '';
     customizeOptionsEl.appendChild(buildSwatchGroup('Skin Tone', SKIN_TONES, 'skin', refreshCharacterPreview));
-    customizeOptionsEl.appendChild(buildSwatchGroup('Shirt Color', SHIRT_COLORS, 'shirt', refreshCharacterPreview));
-    customizeOptionsEl.appendChild(buildSwatchGroup('Pants Color', PANTS_COLORS, 'pants', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildPillGroup('Hair Style', HAIR_STYLES, ['None', 'Short', 'Afro', 'Mohawk'], 'hairStyle', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildSwatchGroup('Hair Color', HAIR_COLORS, 'hairColor', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildPillGroup('Top', TOPS, ['Shirt', 'Jacket', 'Sweatshirt'], 'top', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildSwatchGroup('Top Color', SHIRT_COLORS, 'shirt', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildPillGroup('Bottoms', BOTTOMS, ['Pants', 'Shorts'], 'bottom', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildSwatchGroup('Bottom Color', PANTS_COLORS, 'pants', refreshCharacterPreview));
     customizeOptionsEl.appendChild(buildPillGroup('Hat', HATS, ['None', 'Cap', 'Helmet', 'Crown'], 'hat', refreshCharacterPreview));
-    customizeOptionsEl.appendChild(buildPillGroup('Accessory', ACCESSORIES, ['None', 'Backpack', 'Cape', 'Wings'], 'accessory', refreshCharacterPreview));
+    customizeOptionsEl.appendChild(buildPillGroup('Accessory', ACCESSORIES, ['None', 'Backpack', 'Cape', 'Wings', 'Chain'], 'accessory', refreshCharacterPreview));
   }
 
   // Small dedicated preview scene for the customizer (independent from main game scene)
@@ -246,129 +259,117 @@
     const group = new THREE.Group();
 
     const skinMat = new THREE.MeshStandardMaterial({ color: cfg.skin, roughness: 0.8 });
-    const shirtMat = new THREE.MeshStandardMaterial({ color: cfg.shirt, roughness: 0.62 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: cfg.pants, roughness: 0.68 });
-    const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.5 });
+    const shirtMat = new THREE.MeshStandardMaterial({ color: cfg.shirt, roughness: 0.7 });
+    const pantsMat = new THREE.MeshStandardMaterial({ color: cfg.pants, roughness: 0.7 });
 
-    // Legs — rounded capsules read as actual limbs instead of plank-shaped boxes
-    const legGeo = new THREE.CapsuleGeometry(0.13, 0.62, 4, 10);
-    const legL = new THREE.Mesh(legGeo, pantsMat);
-    legL.position.set(-0.15, 0.44, 0);
-    const legR = new THREE.Mesh(legGeo, pantsMat);
-    legR.position.set(0.15, 0.44, 0);
+    // Legs — shorts show skin below a shorter pants section; both are
+    // grouped with the pivot kept at the same height as a plain pants leg
+    // so the walk-swing animation looks the same either way.
+    let legL, legR;
+    if (cfg.bottom === 'shorts') {
+      legL = new THREE.Group(); legL.position.set(-0.16, 0.375, 0);
+      legR = new THREE.Group(); legR.position.set(0.16, 0.375, 0);
+      [legL, legR].forEach((leg) => {
+        const shortPart = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.32, 0.29), pantsMat);
+        shortPart.position.set(0, 0.215, 0);
+        const shin = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.44, 0.24), skinMat);
+        shin.position.set(0, -0.155, 0);
+        leg.add(shortPart, shin);
+      });
+    } else {
+      const legGeo = new THREE.BoxGeometry(0.28, 0.75, 0.28);
+      legL = new THREE.Mesh(legGeo, pantsMat);
+      legL.position.set(-0.16, 0.375, 0);
+      legR = new THREE.Mesh(legGeo, pantsMat);
+      legR.position.set(0.16, 0.375, 0);
+    }
     group.add(legL, legR);
 
-    // Shoes
-    const shoeGeo = new THREE.BoxGeometry(0.18, 0.12, 0.32);
-    const shoeL = new THREE.Mesh(shoeGeo, shoeMat);
-    shoeL.position.set(-0.15, 0.07, 0.05);
-    const shoeR = new THREE.Mesh(shoeGeo, shoeMat);
-    shoeR.position.set(0.15, 0.07, 0.05);
-    group.add(shoeL, shoeR);
-
-    // Hips (smooths the leg-to-torso joint)
-    const hips = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.1, 4, 10), pantsMat);
-    hips.position.set(0, 0.86, 0);
-    group.add(hips);
-
-    // Torso — tapered capsule reads far more like a human ribcage than a box
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.5, 4, 12), shirtMat);
-    torso.position.set(0, 1.18, 0);
-    torso.scale.set(1.15, 1, 0.72);
+    // Torso
+    const torsoGeo = new THREE.BoxGeometry(0.62, 0.68, 0.36);
+    const torso = new THREE.Mesh(torsoGeo, shirtMat);
+    torso.position.set(0, 1.09, 0);
     group.add(torso);
 
-    // Shoulders (rounds off the arm sockets)
-    const shoulderGeo = new THREE.SphereGeometry(0.13, 12, 12);
-    const shoulderL = new THREE.Mesh(shoulderGeo, shirtMat);
-    shoulderL.position.set(-0.34, 1.42, 0);
-    const shoulderR = new THREE.Mesh(shoulderGeo, shirtMat);
-    shoulderR.position.set(0.34, 1.42, 0);
-    group.add(shoulderL, shoulderR);
-
-    // Arms — upper arm (sleeve) + forearm (skin) for a two-segment silhouette.
-    // Each arm is a Group pivoted AT THE SHOULDER (not the world origin) so
-    // that rotating it for the walk-swing animation pivots naturally instead
-    // of sweeping the whole limb around the character's feet.
-    const upperArmGeo = new THREE.CapsuleGeometry(0.095, 0.28, 4, 8);
-    const foreArmGeo = new THREE.CapsuleGeometry(0.08, 0.26, 4, 8);
-    const handGeo = new THREE.SphereGeometry(0.095, 10, 10);
-
-    const armL = new THREE.Group();
-    armL.position.set(-0.34, 1.42, 0);
-    const upperArmL = new THREE.Mesh(upperArmGeo, shirtMat);
-    upperArmL.position.set(0, -0.18, 0);
-    const foreArmL = new THREE.Mesh(foreArmGeo, skinMat);
-    foreArmL.position.set(0, -0.47, 0);
-    const handL = new THREE.Mesh(handGeo, skinMat);
-    handL.position.set(0, -0.64, 0);
-    armL.add(upperArmL, foreArmL, handL);
-
-    const armR = new THREE.Group();
-    armR.position.set(0.34, 1.42, 0);
-    const upperArmR = new THREE.Mesh(upperArmGeo, shirtMat);
-    upperArmR.position.set(0, -0.18, 0);
-    const foreArmR = new THREE.Mesh(foreArmGeo, skinMat);
-    foreArmR.position.set(0, -0.47, 0);
-    const handR = new THREE.Mesh(handGeo, skinMat);
-    handR.position.set(0, -0.64, 0);
-    armR.add(upperArmR, foreArmR, handR);
-
-    group.add(armL, armR);
-
-    // Neck
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.12, 10), skinMat);
-    neck.position.set(0, 1.5, 0);
-    group.add(neck);
-
-    // Head — slightly egg-shaped rather than a perfect sphere
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 20), skinMat);
-    head.position.set(0, 1.68, 0);
-    head.scale.set(0.92, 1.08, 0.96);
-    group.add(head);
-
-    // Simple friendly face: eyes + a soft mouth line, subtle enough to stay stylized
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.3 });
-    const eyeGeo = new THREE.SphereGeometry(0.028, 8, 8);
-    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
-    eyeL.position.set(-0.09, 1.71, 0.215);
-    const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
-    eyeR.position.set(0.09, 1.71, 0.215);
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.02), new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.6 }));
-    mouth.position.set(0, 1.615, 0.225);
-    group.add(eyeL, eyeR, mouth);
-
-    // Hair (simple scalp cap so the head doesn't read as a bare sphere)
-    if (cfg.hat === 'none') {
-      const hairMat = new THREE.MeshStandardMaterial({ color: cfg.hair !== undefined ? cfg.hair : 0x2b1a12, roughness: 0.75 });
-      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.245, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.52), hairMat);
-      hair.position.set(0, 1.705, -0.01);
-      hair.scale.set(0.96, 1, 1);
-      group.add(hair);
+    // Top style detailing
+    if (cfg.top === 'jacket') {
+      const zipper = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.6, 0.02), new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.6, roughness: 0.3 }));
+      zipper.position.set(0, 1.09, 0.185);
+      const collar = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.12), shirtMat);
+      collar.position.set(0, 1.42, 0.08);
+      group.add(zipper, collar);
+    } else if (cfg.top === 'sweatshirt') {
+      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.14, 0.03), new THREE.MeshStandardMaterial({ color: cfg.shirt, roughness: 0.9 }));
+      pocket.position.set(0, 0.88, 0.185);
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 0.2), shirtMat);
+      hood.position.set(0, 1.48, -0.16);
+      hood.rotation.x = 0.3;
+      group.add(pocket, hood);
     }
 
-    // Hat
+    // Arms
+    const armGeo = new THREE.BoxGeometry(0.22, 0.62, 0.22);
+    const armL = new THREE.Mesh(armGeo, shirtMat);
+    armL.position.set(-0.44, 1.08, 0);
+    const armR = new THREE.Mesh(armGeo, shirtMat);
+    armR.position.set(0.44, 1.08, 0);
+    group.add(armL, armR);
+
+    // Hands
+    const handGeo = new THREE.SphereGeometry(0.11, 10, 10);
+    const handL = new THREE.Mesh(handGeo, skinMat);
+    handL.position.set(-0.44, 0.74, 0);
+    const handR = new THREE.Mesh(handGeo, skinMat);
+    handR.position.set(0.44, 0.74, 0);
+    group.add(handL, handR);
+
+    // Head
+    const headGeo = new THREE.SphereGeometry(0.26, 16, 16);
+    const head = new THREE.Mesh(headGeo, skinMat);
+    head.position.set(0, 1.62, 0);
+    group.add(head);
+
+    // Nose
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), skinMat);
+    nose.position.set(0, 1.60, 0.26);
+    group.add(nose);
+
+    // Hair (hidden under a hat, since the hat already covers this area)
+    if (cfg.hat === 'none' && cfg.hairStyle && cfg.hairStyle !== 'none') {
+      const hairMat = new THREE.MeshStandardMaterial({ color: cfg.hairColor || 0x2b1a12, roughness: 0.75 });
+      if (cfg.hairStyle === 'short') {
+        const hair = new THREE.Mesh(new THREE.SphereGeometry(0.265, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.56), hairMat);
+        hair.position.set(0, 1.66, -0.01);
+        group.add(hair);
+      } else if (cfg.hairStyle === 'afro') {
+        const hair = new THREE.Mesh(new THREE.SphereGeometry(0.34, 16, 16), hairMat);
+        hair.position.set(0, 1.66, 0);
+        group.add(hair);
+      } else if (cfg.hairStyle === 'mohawk') {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.5), hairMat);
+        strip.position.set(0, 1.94, 0);
+        group.add(strip);
+      }
+    }
+
+    // Hat — dome + a forward bill that actually attaches to the dome's rim
+    // (rather than floating separately), and a crown with real points/jewels.
     if (cfg.hat === 'cap') {
       const capMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.6 });
-      // Dome extends a bit past its equator (thetaLength > PI/2) so it hugs
-      // down over the sides of the head instead of floating above it — the
-      // rim then lands right where the brim attaches, with no bald gap.
-      // Both are raised to sit above eye height (eyes are at y=1.71) so the
-      // brim shades from the brow line down, like a real cap, instead of
-      // covering the eyes themselves.
       const dome = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.58), capMat);
-      dome.position.set(0, 1.83, 0);
+      dome.position.set(0, 1.77, 0);
       const brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.035, 0.24), capMat);
-      brim.position.set(0, 1.755, 0.24);
+      brim.position.set(0, 1.695, 0.24);
       brim.rotation.x = -0.12;
       group.add(dome, brim);
     } else if (cfg.hat === 'helmet') {
       const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.27, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.4, roughness: 0.3 }));
-      helmet.position.set(0, 1.70, 0);
+      helmet.position.set(0, 1.64, 0);
       group.add(helmet);
     } else if (cfg.hat === 'crown') {
       const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.75, roughness: 0.25 });
       const band = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, 0.11, 12), goldMat);
-      band.position.set(0, 1.87, 0);
+      band.position.set(0, 1.81, 0);
       group.add(band);
 
       const jewelColors = [0xef4444, 0x3b82f6, 0x22c55e, 0xef4444, 0x3b82f6];
@@ -376,10 +377,10 @@
       for (let i = 0; i < spikeCount; i++) {
         const angle = (i / spikeCount) * Math.PI * 2;
         const spike = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.13, 8), goldMat);
-        spike.position.set(Math.cos(angle) * 0.19, 1.99, Math.sin(angle) * 0.19);
+        spike.position.set(Math.cos(angle) * 0.19, 1.93, Math.sin(angle) * 0.19);
         group.add(spike);
         const jewel = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), new THREE.MeshStandardMaterial({ color: jewelColors[i], roughness: 0.25 }));
-        jewel.position.set(Math.cos(angle) * 0.24, 1.87, Math.sin(angle) * 0.24);
+        jewel.position.set(Math.cos(angle) * 0.24, 1.81, Math.sin(angle) * 0.24);
         group.add(jewel);
       }
     }
@@ -387,23 +388,28 @@
     // Accessory
     if (cfg.accessory === 'backpack') {
       const pack = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.22), new THREE.MeshStandardMaterial({ color: 0x7c2d12 }));
-      pack.position.set(0, 1.16, -0.28);
+      pack.position.set(0, 1.08, -0.28);
       group.add(pack);
     } else if (cfg.accessory === 'cape') {
       const cape = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.05), new THREE.MeshStandardMaterial({ color: 0xdc2626, side: THREE.DoubleSide }));
-      cape.position.set(0, 1.05, -0.22);
+      cape.position.set(0, 0.95, -0.22);
       cape.rotation.x = 0.15;
       group.add(cape);
     } else if (cfg.accessory === 'wings') {
       const wingGeo = new THREE.BoxGeometry(0.5, 0.3, 0.06);
       const wingMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc });
       const wL = new THREE.Mesh(wingGeo, wingMat);
-      wL.position.set(-0.4, 1.32, -0.2);
+      wL.position.set(-0.4, 1.15, -0.2);
       wL.rotation.z = 0.4;
       const wR = new THREE.Mesh(wingGeo, wingMat);
-      wR.position.set(0.4, 1.32, -0.2);
+      wR.position.set(0.4, 1.15, -0.2);
       wR.rotation.z = -0.4;
       group.add(wL, wR);
+    } else if (cfg.accessory === 'chain') {
+      const chain = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.02, 8, 16), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8, roughness: 0.2 }));
+      chain.position.set(0, 1.38, 0.15);
+      chain.rotation.x = Math.PI / 2 - 0.35;
+      group.add(chain);
     }
 
     group.userData.armL = armL;
@@ -413,7 +419,7 @@
 
     if (cfg.weapon && cfg.weapon !== 'fists') {
       const weaponMesh = makeWeaponMesh(cfg.weapon);
-      weaponMesh.position.set(0.1, -0.62, 0.13);
+      weaponMesh.position.set(0.1, -0.34, 0.13);
       weaponMesh.rotation.y = Math.PI / 2;
       armR.add(weaponMesh);
       group.userData.heldWeapon = weaponMesh;
@@ -507,6 +513,10 @@
     state.character.pants = PANTS_COLORS[Math.floor(Math.random() * PANTS_COLORS.length)];
     state.character.hat = HATS[Math.floor(Math.random() * HATS.length)];
     state.character.accessory = ACCESSORIES[Math.floor(Math.random() * ACCESSORIES.length)];
+    state.character.hairStyle = HAIR_STYLES[Math.floor(Math.random() * HAIR_STYLES.length)];
+    state.character.hairColor = HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)];
+    state.character.top = TOPS[Math.floor(Math.random() * TOPS.length)];
+    state.character.bottom = BOTTOMS[Math.floor(Math.random() * BOTTOMS.length)];
     renderCustomizeOptions();
     refreshCharacterPreview();
   });
@@ -537,6 +547,7 @@
   let pedestrians = [];
   let coins = [];
   let banks = []; // {x, z, cooldownUntil}
+  let pizzaPlaces = []; // {x, z, cooldownUntil}
   let shopMarkerPos = null;
   let gameStarted = false;
   let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
@@ -699,6 +710,9 @@
       { bx: mid - 2, bz: mid - 2 },
       { bx: Math.min(CITY_BLOCKS - 1, mid + 1), bz: Math.min(CITY_BLOCKS - 1, mid + 2) },
     ];
+    const pizzaSpots = [
+      { bx: Math.min(CITY_BLOCKS - 1, mid + 2), bz: Math.max(0, mid - 1) },
+    ];
 
     for (let bx = 0; bx < CITY_BLOCKS; bx++) {
       for (let bz = 0; bz < CITY_BLOCKS; bz++) {
@@ -708,6 +722,7 @@
 
         const isShopBlock = !shopMarkerPos && bx === mid && bz === mid;
         const bankSpot = bankSpots.find((b) => b.bx === bx && b.bz === bz && b.bx !== mid);
+        const pizzaSpot = pizzaSpots.find((p) => p.bx === bx && p.bz === bz && p.bx !== mid && !bankSpots.some((b) => b.bx === bx && b.bz === bz));
 
         if (isShopBlock) {
           const w = footprint * 0.8, d = footprint * 0.8, h = 8;
@@ -734,6 +749,20 @@
           addFloatingSign(cx, h + 1.6, cz, '🏦 BANK');
           buildingBoxes.push(boxOf(cx, cz, w, d));
           banks.push({ x: cx, z: cz, cooldownUntil: 0 });
+          continue;
+        }
+
+        if (pizzaSpot) {
+          const w = footprint * 0.65, d = footprint * 0.65, h = 6.5;
+          const mat = makeBuildingMaterials(0xdc2626, w, h, d, { winScale: 0.75, litChance: 0.6 });
+          const place = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+          place.position.set(cx, h / 2, cz);
+          place.castShadow = true;
+          place.receiveShadow = true;
+          scene.add(place);
+          addFloatingSign(cx, h + 1.6, cz, '🍕 PIZZA PLACE');
+          buildingBoxes.push(boxOf(cx, cz, w, d));
+          pizzaPlaces.push({ x: cx, z: cz, cooldownUntil: 0 });
           continue;
         }
 
@@ -812,6 +841,18 @@
     return { x: 0, z: 6 };
   }
 
+  // Same idea, but biased to land within `radius` of (cx,cz) — used to
+  // guarantee a few cars/pedestrians spawn visibly near the player's start
+  // instead of only ever scattered randomly across the whole city.
+  function randomOpenSpotNear(cx, cz, radius, margin) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const x = cx + (Math.random() * 2 - 1) * radius;
+      const z = cz + (Math.random() * 2 - 1) * radius;
+      if (!collidesWithBuildings(x, z, margin || 1.2)) return { x, z };
+    }
+    return randomOpenSpot(margin);
+  }
+
   function collidesWithBuildings(x, z, margin) {
     for (const b of buildingBoxes) {
       if (x > b.minX - margin && x < b.maxX + margin && z > b.minZ - margin && z < b.maxZ + margin) return true;
@@ -872,9 +913,10 @@
   }
 
   function spawnVehicles() {
-    const count = 9;
+    const count = 26;
+    const nearSpawnCount = 4; // guarantees cars are visible right at the start, not just scattered far away
     for (let i = 0; i < count; i++) {
-      const spot = randomOpenSpot(3);
+      const spot = i < nearSpawnCount ? randomOpenSpotNear(4, 10, 22, 3) : randomOpenSpot(3);
       const color = CAR_COLORS[i % CAR_COLORS.length];
       const mesh = makeCarMesh(color);
       mesh.position.set(spot.x, 0, spot.z);
@@ -930,7 +972,11 @@
       skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
       shirt: SHIRT_COLORS[Math.floor(Math.random() * SHIRT_COLORS.length)],
       pants: PANTS_COLORS[Math.floor(Math.random() * PANTS_COLORS.length)],
-      hat: 'none', accessory: 'none',
+      hat: 'none', accessory: Math.random() < 0.15 ? 'chain' : 'none',
+      hairStyle: HAIR_STYLES[1 + Math.floor(Math.random() * (HAIR_STYLES.length - 1))],
+      hairColor: HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)],
+      top: TOPS[Math.floor(Math.random() * TOPS.length)],
+      bottom: BOTTOMS[Math.floor(Math.random() * BOTTOMS.length)],
     };
     const mesh = buildCharacterMesh(cfg);
     mesh.scale.setScalar(0.95);
@@ -1125,6 +1171,10 @@
     if (now - state.lastShotTime < cooldown) return;
     state.lastShotTime = now;
 
+    const crosshairEl = $('crosshair');
+    crosshairEl.classList.add('firing');
+    setTimeout(() => crosshairEl.classList.remove('firing'), 90);
+
     // Muzzle flash-ish quick blast effect + hit detection along player facing direction
     const originX = player.x, originZ = player.z;
     const dirX = Math.sin(player.heading), dirZ = Math.cos(player.heading);
@@ -1168,12 +1218,21 @@
     ped.fleeing = true;
   }
 
+  // A small silver pellet with a weapon-colored tip, instead of a glowing
+  // orb — reads as a dart/pellet rather than a sci-fi laser bolt.
   function spawnBlasterFX(x, z, heading) {
-    const geo = new THREE.SphereGeometry(0.12, 8, 8);
     const w = getWeapon(state.currentWeaponId);
-    const mat = new THREE.MeshBasicMaterial({ color: w.color });
-    const fx = new THREE.Mesh(geo, mat);
+    const fx = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.045, 0.2, 8),
+      new THREE.MeshStandardMaterial({ color: 0xd4d4d8, metalness: 0.7, roughness: 0.25 })
+    );
+    body.rotation.x = Math.PI / 2;
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), new THREE.MeshStandardMaterial({ color: w.color, roughness: 0.4 }));
+    tip.position.set(0, 0, 0.12);
+    fx.add(body, tip);
     fx.position.set(x + Math.sin(heading) * 1.2, 1.1, z + Math.cos(heading) * 1.2);
+    fx.rotation.y = heading;
     scene.add(fx);
     let life = 0;
     const dirX = Math.sin(heading), dirZ = Math.cos(heading);
@@ -1445,6 +1504,12 @@
       mapCtx.fillText('🏦', p.px, p.py + 6);
     });
 
+    // pizza places
+    pizzaPlaces.forEach((place) => {
+      const p = worldToMapPx(place.x, place.z, size);
+      mapCtx.fillText('🍕', p.px, p.py + 6);
+    });
+
     // robots
     mapCtx.fillStyle = '#ef4444';
     robots.forEach((r) => {
@@ -1474,16 +1539,19 @@
       mapCtx.fillText('📍', to.px, to.py + 6);
     }
 
-    // player
+    // player — built directly from the same (sin,cos) forward vector used
+    // for real movement (see updatePlayerWalking) rather than ctx.rotate(),
+    // whose CCW-positive convention reads as backwards once mapped through
+    // canvas's flipped Y axis; matching the vector avoids that mismatch.
     const pp = worldToMapPx(player.x, player.z, size);
-    mapCtx.save();
-    mapCtx.translate(pp.px, pp.py);
-    mapCtx.rotate(player.heading);
+    const fwdX = Math.sin(player.heading), fwdY = Math.cos(player.heading);
+    const rightX = fwdY, rightY = -fwdX;
     mapCtx.fillStyle = '#22d3ee';
     mapCtx.beginPath();
-    mapCtx.moveTo(0, -8); mapCtx.lineTo(6, 7); mapCtx.lineTo(-6, 7);
+    mapCtx.moveTo(pp.px + fwdX * 8, pp.py + fwdY * 8);
+    mapCtx.lineTo(pp.px - fwdX * 6 + rightX * 6, pp.py - fwdY * 6 + rightY * 6);
+    mapCtx.lineTo(pp.px - fwdX * 6 - rightX * 6, pp.py - fwdY * 6 - rightY * 6);
     mapCtx.closePath(); mapCtx.fill();
-    mapCtx.restore();
   }
 
   mapCanvas.addEventListener('pointerdown', (e) => {
@@ -1579,16 +1647,26 @@
       miniCtx.textAlign = 'center';
       miniCtx.fillText('🏦', p.px, p.py + 4);
     });
+    pizzaPlaces.forEach((place) => {
+      if (Math.hypot(place.x - player.x, place.z - player.z) > MINI_RANGE) return;
+      const p = toMini(place.x, place.z);
+      miniCtx.font = '13px sans-serif';
+      miniCtx.textAlign = 'center';
+      miniCtx.fillText('🍕', p.px, p.py + 4);
+    });
 
-    // player arrow (always centered, points with heading)
-    miniCtx.save();
-    miniCtx.translate(center, center);
-    miniCtx.rotate(player.heading);
-    miniCtx.fillStyle = '#facc15';
-    miniCtx.beginPath();
-    miniCtx.moveTo(0, -7); miniCtx.lineTo(5, 6); miniCtx.lineTo(-5, 6);
-    miniCtx.closePath(); miniCtx.fill();
-    miniCtx.restore();
+    // player arrow (always centered, points with heading) — same direct
+    // forward-vector construction as drawMap(), see the comment there.
+    {
+      const fwdX = Math.sin(player.heading), fwdY = Math.cos(player.heading);
+      const rightX = fwdY, rightY = -fwdX;
+      miniCtx.fillStyle = '#facc15';
+      miniCtx.beginPath();
+      miniCtx.moveTo(center + fwdX * 7, center + fwdY * 7);
+      miniCtx.lineTo(center - fwdX * 6 + rightX * 5, center - fwdY * 6 + rightY * 5);
+      miniCtx.lineTo(center - fwdX * 6 - rightX * 5, center - fwdY * 6 - rightY * 5);
+      miniCtx.closePath(); miniCtx.fill();
+    }
 
     miniCtx.restore();
     miniCtx.strokeStyle = '#22d3ee';
@@ -1605,7 +1683,12 @@
     compass.style.opacity = '1';
     const dx = state.waypoint.x - player.x, dz = state.waypoint.z - player.z;
     const angle = Math.atan2(dx, dz) - player.heading;
-    compass.style.transform = `translate(-50%, -50%) rotate(${angle}rad)`;
+    // The ➤ glyph points right at rotate(0); CSS rotate() is also
+    // clockwise-positive in a way that mismatches our world-heading
+    // convention (same root cause as the map-arrow fix above), so the
+    // sign is flipped and a -90deg baseline is added to make "target
+    // straight ahead" point the glyph up instead of right.
+    compass.style.transform = `translate(-50%, -50%) rotate(${-angle - Math.PI / 2}rad)`;
     const dist = Math.round(Math.hypot(dx, dz));
     $('waypoint-distance').textContent = dist;
     info.classList.remove('hidden');
@@ -1665,6 +1748,16 @@
     }
     state.nearBank = nearBank;
 
+    // nearest pizza place
+    let nearPizza = null, nearPizzaDist = 10;
+    if (!state.inVehicle) {
+      for (const p of pizzaPlaces) {
+        const d = Math.hypot(p.x - player.x, p.z - player.z);
+        if (d < nearPizzaDist) { nearPizza = p; nearPizzaDist = d; }
+      }
+    }
+    state.nearPizza = nearPizza;
+
     const promptEl = $('prompt-banner');
     if (state.inVehicle) {
       promptEl.textContent = 'Press 🚪 or E to exit the car';
@@ -1685,10 +1778,29 @@
       promptEl.textContent = locked ? '🏦 Vault is locked — check back soon' : 'Tap here to crack the bank vault 🏦';
       promptEl.classList.remove('hidden');
       promptEl.onclick = () => robBank(state.nearBank);
+    } else if (state.nearPizza) {
+      const locked = performance.now() / 1000 < state.nearPizza.cooldownUntil;
+      promptEl.textContent = locked ? '🍕 The oven is still going — check back soon' : 'Tap here to grab a cheese pizza 🍕';
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = () => grabPizza(state.nearPizza);
     } else {
       promptEl.classList.add('hidden');
       promptEl.onclick = null;
     }
+  }
+
+  function grabPizza(place) {
+    const now = performance.now() / 1000;
+    if (now < place.cooldownUntil) {
+      toast('🍕 The oven is still going. Try again later!');
+      return;
+    }
+    const reward = 20 + Math.floor(Math.random() * 30);
+    place.cooldownUntil = now + 20;
+    state.money += reward;
+    updateHUDMoney();
+    writeSave();
+    toast(`🍕 Grabbed a cheese pizza! +$${reward}`, 2400);
   }
 
   function robBank(bank) {
@@ -1717,10 +1829,11 @@
 
     if (player.walking) {
       // Movement is relative to where the camera is currently looking, so
-      // pushing "forward" always walks into the screen — not some fixed
-      // world direction left over from before you last dragged to look
-      // around.
-      const inputAngle = Math.atan2(mx, -my);
+      // pushing "forward" always walks into the screen, and — crucially —
+      // pushing left/right turns toward the screen's actual left/right (mx
+      // is negated here to match the camera's true world-space right
+      // vector; without it, left/right come out mirrored).
+      const inputAngle = Math.atan2(-mx, -my);
       player.heading = cameraYaw + Math.PI + inputAngle;
       const speed = 6.2;
       const nx = player.x + Math.sin(player.heading) * speed * dt * Math.min(mag, 1);
@@ -1925,6 +2038,7 @@
     checkMissionArrival();
     drawMinimap();
     updateCompassAndWaypointInfo();
+    $('crosshair').classList.toggle('hidden', !!state.inVehicle);
 
     renderer.render(scene, camera);
   }
@@ -1938,9 +2052,10 @@
     get robots() { return robots; },
     get pedestrians() { return pedestrians; },
     get banks() { return banks; },
+    get pizzaPlaces() { return pizzaPlaces; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
-    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, CONTACTS, WEAPONS,
+    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, CONTACTS, WEAPONS,
   };
 
 })();

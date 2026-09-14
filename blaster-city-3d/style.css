@@ -224,6 +224,7 @@ html, body {
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  z-index: 8;
 }
 #minimap {
   border-radius: 50%;
@@ -271,6 +272,7 @@ html, body {
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
+  z-index: 8;
 }
 #money-display {
   background: rgba(11,20,36,0.85);
@@ -306,6 +308,7 @@ html, body {
   font-size: 13px;
   max-width: 60%;
   text-align: center;
+  z-index: 8;
 }
 #mission-banner.hidden { display: none; }
 
@@ -319,6 +322,7 @@ html, body {
   padding: 8px 18px;
   border-radius: 10px;
   font-size: 14px;
+  z-index: 8;
 }
 #prompt-banner.hidden { display: none; }
 
@@ -329,6 +333,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  z-index: 8;
 }
 .icon-button {
   width: 44px;
@@ -386,6 +391,53 @@ html, body {
   height: 70%;
   z-index: 4;
 }
+#look-hint {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: rgba(11,20,36,0.6);
+  border: 1px solid rgba(148,163,184,0.35);
+  color: #cbd5e1;
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ===================== Crosshair (aim reticle) ===================== */
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 26px;
+  height: 26px;
+  pointer-events: none;
+  z-index: 7;
+}
+#crosshair.hidden { display: none; }
+#crosshair::before, #crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgba(255,255,255,0.75);
+  box-shadow: 0 0 2px rgba(0,0,0,0.8);
+}
+#crosshair::before { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+#crosshair::after { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+#crosshair-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #facc15;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 3px rgba(0,0,0,0.8);
+}
+#crosshair.firing #crosshair-dot { background: #ef4444; }
+#crosshair.firing::before, #crosshair.firing::after { background: rgba(239,68,68,0.9); }
 
 #action-buttons {
   position: absolute;
