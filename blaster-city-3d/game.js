@@ -26,6 +26,7 @@
         money: state.money,
         ownedWeapons: state.ownedWeapons,
         currentWeaponId: state.currentWeaponId,
+        ammo: state.ammo,
         character: state.character,
         hasBaseAccess: state.hasBaseAccess,
         apartmentsOwned: apartments.map((a) => a.owned),
@@ -40,10 +41,12 @@
     { id: 'fists', name: 'Fists', icon: '✋', price: 0, damage: 8, rate: 2.2, range: 3.5, color: 0xffffff, splash: false },
     { id: 'water', name: 'Water Blaster', icon: '💦', price: 0, damage: 14, rate: 4, range: 24, color: 0x38bdf8, splash: false },
     { id: 'foam', name: 'Foam Dart Blaster', icon: '🧯', price: 150, damage: 22, rate: 5, range: 30, color: 0xfacc15, splash: false },
+    { id: 'rapid', name: 'Rapid Soaker', icon: '🌊', price: 500, damage: 6, rate: 13, range: 22, color: 0x0ea5e9, splash: false },
     { id: 'confetti', name: 'Confetti Cannon', icon: '🎉', price: 350, damage: 34, rate: 2.4, range: 26, color: 0xf472b6, splash: 3 },
     { id: 'bubble', name: 'Bubble Bazooka', icon: '🫧', price: 700, damage: 55, rate: 1.3, range: 34, color: 0xa78bfa, splash: 5 },
     { id: 'mega', name: 'Mega Soaker 9000', icon: '🚀', price: 1500, damage: 100, rate: 1.6, range: 40, color: 0xfb923c, splash: 6 },
   ];
+  const MAX_AMMO = 20; // fists don't need ammo — everything else has to be refilled at the shop
 
   const SKIN_TONES = [0xffdbb4, 0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0x5a3825];
   const SHIRT_COLORS = [0xef4444, 0x3b82f6, 0x22c55e, 0xf59e0b, 0xa855f7, 0x111827, 0xec4899, 0xffffff];
@@ -68,6 +71,7 @@
     money: 300,
     ownedWeapons: ['fists', 'water'],
     currentWeaponId: 'water',
+    ammo: { water: MAX_AMMO },
     character: {
       skin: SKIN_TONES[0],
       shirt: SHIRT_COLORS[1],
@@ -103,6 +107,8 @@
     state.hasBaseAccess = !!saved.hasBaseAccess;
     state.ownedWeapons = Array.isArray(saved.ownedWeapons) && saved.ownedWeapons.length ? saved.ownedWeapons : state.ownedWeapons;
     state.currentWeaponId = saved.currentWeaponId || state.currentWeaponId;
+    if (saved.ammo && typeof saved.ammo === 'object') Object.assign(state.ammo, saved.ammo);
+    state.ownedWeapons.forEach((id) => { if (id !== 'fists' && state.ammo[id] === undefined) state.ammo[id] = MAX_AMMO; });
     if (saved.character) Object.assign(state.character, saved.character);
     if (Array.isArray(saved.apartmentsOwned)) pendingApartmentsOwned = saved.apartmentsOwned;
   }
@@ -634,6 +640,9 @@
   let oceanTime = 0;
   let oceanStartZ = Infinity; // z where sand ends and water begins — keeps jet skis off the sand
   let beachClampR = 0; // lets the world-bounds clamp reach the far edge of the ocean
+  let mountainPeaks = [];
+  let mountainZ = 0;
+  let mountainClampR = 0;
   let shopMarkerPos = null;
   let gameStarted = false;
   let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
@@ -983,7 +992,7 @@
   function worldClampR() {
     const cityR = WORLD_HALF + BLOCK_SIZE / 2 - 2;
     const militaryR = militaryBaseCenter ? (militaryBaseCenter.clampR || militaryBaseCenter.x + 30) : 0;
-    return Math.max(cityR, militaryR, beachClampR);
+    return Math.max(cityR, militaryR, beachClampR, mountainClampR);
   }
 
   // ------------------------------------------------------------
@@ -1121,6 +1130,10 @@
       { x: -260, h: 95, r: 115 }, { x: -150, h: 120, r: 130 }, { x: -20, h: 145, r: 150 },
       { x: 110, h: 125, r: 135 }, { x: 230, h: 100, r: 120 }, { x: 340, h: 85, r: 105 },
     ];
+    mountainPeaks = peaks;
+    mountainZ = mz;
+    const farthestX = Math.max(...peaks.map((p) => Math.abs(p.x) + p.r));
+    mountainClampR = Math.max(farthestX, Math.abs(mz) + Math.max(...peaks.map((p) => p.r))) + 15;
     peaks.forEach((p, i) => {
       const mat = new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0x5b6b4f : 0x4a5a40, roughness: 0.95 });
       const cone = new THREE.Mesh(new THREE.ConeGeometry(p.r, p.h, 9), mat);
@@ -1130,6 +1143,22 @@
     });
     const tallest = peaks.reduce((a, b) => (b.h > a.h ? b : a));
     buildHollywoodSign(tallest.x, tallest.h * 0.42, mz + tallest.r * 0.55);
+  }
+
+  // Lets the player actually climb the mountains instead of them being an
+  // unreachable backdrop: each peak is a cone, so its surface height falls
+  // off linearly from the tip to the base radius — walking toward one
+  // raises the floor under your feet the same way a rooftop does.
+  function getMountainHeightAt(x, z) {
+    let best = 0;
+    for (const p of mountainPeaks) {
+      const d = Math.hypot(x - p.x, z - mountainZ);
+      if (d < p.r) {
+        const h = (p.h - 3) - (d / p.r) * p.h;
+        if (h > best) best = h;
+      }
+    }
+    return best;
   }
 
   function buildHollywoodSign(x, y, z) {
@@ -1776,11 +1805,13 @@
       const mesh = makeRobotMesh();
       mesh.position.set(spot.x, 0, spot.z);
       scene.add(mesh);
-      robots.push({
+      const bot = {
         mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2,
         hp: 40 + Math.floor(Math.random() * 40), maxHp: 40,
         alive: true, wanderTimer: Math.random() * 3, fleeing: false,
-      });
+      };
+      mesh.userData.entityRef = bot; // lets a raycast hit on any child part resolve back to this robot
+      robots.push(bot);
     }
   }
 
@@ -1807,7 +1838,9 @@
       const mesh = makePedestrianMesh();
       mesh.position.set(spot.x, 0, spot.z);
       scene.add(mesh);
-      pedestrians.push({ mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, wanderTimer: Math.random() * 3, fleeing: false });
+      const ped = { mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, wanderTimer: Math.random() * 3, fleeing: false };
+      mesh.userData.entityRef = ped;
+      pedestrians.push(ped);
     }
   }
 
@@ -1821,7 +1854,9 @@
     const sz = z + Math.cos(sideStep) * 1.6;
     mesh.position.set(sx, 0, sz);
     scene.add(mesh);
-    pedestrians.push({ mesh, x: sx, z: sz, heading: Math.random() * Math.PI * 2, wanderTimer: 999, fleeing: true });
+    const ped = { mesh, x: sx, z: sz, heading: Math.random() * Math.PI * 2, wanderTimer: 999, fleeing: true };
+    mesh.userData.entityRef = ped;
+    pedestrians.push(ped);
   }
 
   // ------------------------------------------------------------
@@ -1940,6 +1975,8 @@
       itemsMenu.classList.add('hidden');
       state.aimMarkerOn = !state.aimMarkerOn;
     });
+    $('btn-weapon-prev').addEventListener('click', () => cycleWeapon(-1));
+    $('btn-weapon-next').addEventListener('click', () => cycleWeapon(1));
     $('btn-clear-waypoint').addEventListener('click', () => {
       state.waypoint = null;
       $('waypoint-info').classList.add('hidden');
@@ -1969,6 +2006,17 @@
     writeSave();
   }
 
+  // Quick-swap with the arrow buttons on the HUD weapon display, so once
+  // you own a bunch of weapons you don't have to open the full wheel just
+  // to flip to the next one.
+  function cycleWeapon(direction) {
+    const owned = WEAPONS.filter((w) => state.ownedWeapons.includes(w.id));
+    if (owned.length <= 1) return;
+    const idx = owned.findIndex((w) => w.id === state.currentWeaponId);
+    const nextIdx = (idx + direction + owned.length) % owned.length;
+    equipWeapon(owned[nextIdx].id);
+  }
+
   // Swaps the 3D prop in the player's hand to match the equipped weapon
   // without rebuilding the whole character model.
   function updateHeldWeaponMesh() {
@@ -1993,11 +2041,36 @@
     const w = getWeapon(state.currentWeaponId);
     $('weapon-icon').textContent = w.icon;
     $('weapon-name').textContent = w.name;
+    const ammoEl = $('weapon-ammo');
+    if (w.id === 'fists') {
+      ammoEl.textContent = '';
+      ammoEl.classList.remove('low');
+    } else {
+      const ammo = state.ammo[w.id] || 0;
+      ammoEl.textContent = `${ammo}/${MAX_AMMO}`;
+      ammoEl.classList.toggle('low', ammo === 0);
+    }
   }
 
   function updateHUDMoney() {
     $('money-value').textContent = state.money;
     $('shop-money').textContent = state.money;
+  }
+
+  // Reused every shot rather than allocated fresh — a Raycaster is cheap
+  // to reset but there's no reason to churn one per shot.
+  const fireRaycaster = new THREE.Raycaster();
+
+  // Walks up from whatever mesh part the ray actually hit (an arm, the
+  // head, whatever) to the robot/pedestrian object that owns it — every
+  // top-level bot/ped mesh is tagged with userData.entityRef at spawn.
+  function findEntityFromHit(object) {
+    let o = object;
+    while (o) {
+      if (o.userData && o.userData.entityRef) return o.userData.entityRef;
+      o = o.parent;
+    }
+    return null;
   }
 
   function fireWeapon() {
@@ -2006,35 +2079,50 @@
     const now = performance.now() / 1000;
     const cooldown = 1 / w.rate;
     if (now - state.lastShotTime < cooldown) return;
+
+    if (w.id !== 'fists') {
+      const ammo = state.ammo[w.id] || 0;
+      if (ammo <= 0) {
+        toast(`${w.icon} Out of ammo! Refill at the Blaster Shop 💦`, 1800);
+        return;
+      }
+      state.ammo[w.id] = ammo - 1;
+      updateWeaponHUD();
+      writeSave();
+    }
     state.lastShotTime = now;
 
-    // Muzzle flash-ish quick blast effect + hit detection along player facing direction
     const originX = player.x, originZ = player.z;
-    const dirX = Math.sin(player.heading), dirZ = Math.cos(player.heading);
+
+    // A ray straight through screen-center from the actual camera position
+    // dives into the ground a short distance past the player — the camera
+    // orbits close and pitched down just to keep a nearby player in frame,
+    // and continuing that exact sightline out further only sinks lower.
+    // So: aim horizontally by cameraYaw (matches drag-look left/right
+    // precisely — no more "anything within ~20°" cone), and aim vertically
+    // by how far cameraPitch has been dragged from its resting angle, at a
+    // much gentler rate — enough to deliberately aim up at a head or down
+    // at the ground, without the ray's height collapsing over distance.
+    const aimYaw = cameraYaw + Math.PI; // world-space "into the screen" direction, same convention as player.heading
+    const aimDir = new THREE.Vector3(
+      Math.sin(aimYaw),
+      (0.28 - cameraPitch) * 1.1,
+      Math.cos(aimYaw)
+    ).normalize();
+    fireRaycaster.set(new THREE.Vector3(originX, cameraFollowY + 1.3, originZ), aimDir);
+    const targetMeshes = [];
+    robots.forEach((bot) => { if (bot.alive) targetMeshes.push(bot.mesh); });
+    pedestrians.forEach((ped) => targetMeshes.push(ped.mesh));
+    const hits = fireRaycaster.intersectObjects(targetMeshes, true);
 
     let hitSomething = false;
-    for (const bot of robots) {
-      if (!bot.alive) continue;
-      const dx = bot.x - originX, dz = bot.z - originZ;
-      const dist = Math.hypot(dx, dz);
-      if (dist > w.range) continue;
-      const angleTo = Math.atan2(dx, dz);
-      let diff = angleTo - player.heading;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      if (Math.abs(diff) < 0.35) {
-        applyDamageToRobot(bot, w.damage);
+    if (hits.length && hits[0].distance <= w.range) {
+      const entity = findEntityFromHit(hits[0].object);
+      if (entity && robots.includes(entity)) {
+        applyDamageToRobot(entity, w.damage);
         hitSomething = true;
-      }
-    }
-    for (const ped of pedestrians) {
-      const dx = ped.x - originX, dz = ped.z - originZ;
-      const dist = Math.hypot(dx, dz);
-      if (dist > w.range) continue;
-      const angleTo = Math.atan2(dx, dz);
-      let diff = angleTo - player.heading;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      if (Math.abs(diff) < 0.35) {
-        splashPedestrian(ped);
+      } else if (entity && pedestrians.includes(entity)) {
+        splashPedestrian(entity);
         hitSomething = true;
       }
     }
@@ -2102,7 +2190,9 @@
           const mesh = makeRobotMesh();
           mesh.position.set(spot.x, 0, spot.z);
           scene.add(mesh);
-          robots.push({ mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, hp: 40 + Math.floor(Math.random() * 40), maxHp: 40, alive: true, wanderTimer: Math.random() * 3, fleeing: false });
+          const freshBot = { mesh, x: spot.x, z: spot.z, heading: Math.random() * Math.PI * 2, hp: 40 + Math.floor(Math.random() * 40), maxHp: 40, alive: true, wanderTimer: Math.random() * 3, fleeing: false };
+          mesh.userData.entityRef = freshBot;
+          robots.push(freshBot);
         }, 4000);
       }, 900);
     }
@@ -2111,33 +2201,40 @@
   // ------------------------------------------------------------
   // Shop
   // ------------------------------------------------------------
+  const REFILL_COST = 10;
+
   function renderShop() {
     const list = $('shop-list');
     list.innerHTML = '';
     WEAPONS.forEach((w) => {
       const owned = state.ownedWeapons.includes(w.id);
       const equipped = state.currentWeaponId === w.id;
+      const ammoText = w.id === 'fists' ? '' : ` &middot; Ammo ${owned ? (state.ammo[w.id] || 0) : MAX_AMMO}/${MAX_AMMO}`;
       const row = document.createElement('div');
       row.className = 'item-row';
       row.innerHTML = `
         <div class="item-icon">${w.icon}</div>
         <div class="item-info">
           <div class="item-name">${w.name}</div>
-          <div class="item-desc">Damage ${w.damage} &middot; Range ${w.range}m ${w.price ? '&middot; $' + w.price : '&middot; Free'}</div>
+          <div class="item-desc">Damage ${w.damage} &middot; Range ${w.range}m ${w.price ? '&middot; $' + w.price : '&middot; Free'}${ammoText}</div>
         </div>
         <div class="item-action"></div>
       `;
       const actionDiv = row.querySelector('.item-action');
-      const btn = document.createElement('button');
       if (equipped) {
+        const btn = document.createElement('button');
         btn.textContent = 'Equipped';
         btn.className = 'equipped';
         btn.disabled = true;
+        actionDiv.appendChild(btn);
       } else if (owned) {
+        const btn = document.createElement('button');
         btn.textContent = 'Equip';
         btn.className = 'equip';
         btn.addEventListener('click', () => { equipWeapon(w.id); renderShop(); });
+        actionDiv.appendChild(btn);
       } else {
+        const btn = document.createElement('button');
         btn.textContent = `Buy $${w.price}`;
         btn.className = 'buy';
         btn.disabled = state.money < w.price;
@@ -2146,14 +2243,34 @@
           state.money -= w.price;
           state.ownedWeapons.push(w.id);
           state.currentWeaponId = w.id;
+          state.ammo[w.id] = MAX_AMMO;
           updateHUDMoney();
           updateWeaponHUD();
           writeSave();
           toast(`Bought ${w.name}!`);
           renderShop();
         });
+        actionDiv.appendChild(btn);
       }
-      actionDiv.appendChild(btn);
+      // Refilling is available any time it's owned and not full, whether
+      // or not it's the one currently equipped.
+      if (owned && w.id !== 'fists' && (state.ammo[w.id] || 0) < MAX_AMMO) {
+        const refillBtn = document.createElement('button');
+        refillBtn.textContent = `Refill $${REFILL_COST}`;
+        refillBtn.className = 'buy';
+        refillBtn.disabled = state.money < REFILL_COST;
+        refillBtn.addEventListener('click', () => {
+          if (state.money < REFILL_COST) return;
+          state.money -= REFILL_COST;
+          state.ammo[w.id] = MAX_AMMO;
+          updateHUDMoney();
+          updateWeaponHUD();
+          writeSave();
+          toast(`${w.icon} Refilled!`, 1400);
+          renderShop();
+        });
+        actionDiv.appendChild(refillBtn);
+      }
       list.appendChild(row);
     });
   }
@@ -2650,12 +2767,23 @@
     if (state.inVehicle) {
       // exit
       const v = state.inVehicle;
+      const wasMoving = Math.abs(v.speed) > 2;
       player.x = v.x + Math.sin(v.heading + Math.PI / 2) * 2.4;
       player.z = v.z + Math.cos(v.heading + Math.PI / 2) * 2.4;
       player.heading = v.heading;
       playerMesh.visible = true;
       state.inVehicle = null;
-      toast('🚪 You got out of the car.');
+      if (wasMoving) {
+        // Bailing out while it's still rolling costs health, and the car
+        // doesn't just stop dead — it keeps going on its own (picked up by
+        // the normal NPC traffic AI) until it hits a building.
+        damagePlayer(10);
+        v.occupied = true;
+        v.decidedAtIntersection = false;
+        toast('🚪💥 You jumped out while it was moving! -10 health', 2200);
+      } else {
+        toast('🚪 You got out of the car.');
+      }
     } else if (state.nearVehicle) {
       const v = state.nearVehicle;
       if (v.occupied) {
@@ -2912,7 +3040,7 @@
     }
     player.vy -= GRAVITY * dt;
     player.y += player.vy * dt;
-    const floorY = getFloorHeightAt(player.x, player.z);
+    const floorY = Math.max(getFloorHeightAt(player.x, player.z), getMountainHeightAt(player.x, player.z));
     if (player.y <= floorY) {
       player.y = floorY;
       player.vy = 0;
@@ -3373,10 +3501,13 @@
     get militaryBaseCenter() { return militaryBaseCenter; },
     get militaryGateBox() { return militaryGateBox; },
     get buildingBoxes() { return buildingBoxes; },
+    get mountainPeaks() { return mountainPeaks; },
+    get mountainZ() { return mountainZ; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
     fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
-    getFloorHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment, restAtApartment, buyFood,
+    getFloorHeightAt, getMountainHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment,
+    restAtApartment, buyFood, cycleWeapon,
     CONTACTS, WEAPONS,
   };
 
