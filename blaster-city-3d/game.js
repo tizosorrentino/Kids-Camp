@@ -154,6 +154,7 @@
       if (which === 'shop') hideOverlay(shopOverlay);
       if (which === 'phone') hideOverlay(phoneOverlay);
       if (which === 'map') hideOverlay(mapOverlay);
+      if (which === 'weapons') hideOverlay(weaponWheelOverlay);
     });
   });
 
