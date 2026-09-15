@@ -424,6 +424,47 @@ html, body {
 }
 .icon-button:active { transform: scale(0.94); }
 
+.items-wrap { position: relative; }
+.items-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  gap: 1px;
+}
+.items-emoji { font-size: 17px; }
+.items-caption { font-size: 7px; letter-spacing: 0.5px; font-weight: 700; color: #94a3b8; }
+.items-menu {
+  position: absolute;
+  top: 52px;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+  padding: 6px;
+  background: rgba(11,20,36,0.95);
+  border: 1px solid #334867;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+.items-menu.hidden { display: none; }
+.items-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #f1f5f9;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.items-row:active { background: rgba(255,255,255,0.1); }
+
 /* ===================== Touch controls ===================== */
 #touch-controls {
   position: absolute;

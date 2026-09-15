@@ -94,12 +94,19 @@
 
     <div id="prompt-banner" class="hidden"></div>
 
-    <!-- top icon buttons -->
+    <!-- top icon buttons — everything lives behind one Items button -->
     <div id="icon-buttons">
-      <button id="btn-phone" class="icon-button" title="Phone">📱</button>
-      <button id="btn-map" class="icon-button" title="Map">🗺️</button>
-      <button id="btn-weapons" class="icon-button" title="Weapons">🧰</button>
-      <button id="btn-aim-marker" class="icon-button" title="Aim Marker">🎯</button>
+      <div class="items-wrap">
+        <button id="btn-items" class="icon-button items-toggle" title="Items">
+          <span class="items-emoji">🎒</span><span class="items-caption">ITEMS</span>
+        </button>
+        <div id="items-menu" class="items-menu hidden">
+          <button id="btn-phone" class="items-row">📱 <span>Phone</span></button>
+          <button id="btn-map" class="items-row">🗺️ <span>Map</span></button>
+          <button id="btn-weapons" class="items-row">🧰 <span>Weapons</span></button>
+          <button id="btn-aim-marker" class="items-row">🎯 <span>Aim Marker</span></button>
+        </div>
+      </div>
     </div>
 
     <!-- ===================== TOUCH CONTROLS ===================== -->
@@ -158,12 +165,14 @@
     <div class="map-fullscreen">
       <div class="map-header">
         <h2>🗺️ City Map</h2>
-        <p id="map-instructions">Tap anywhere on the map to drop a GPS waypoint.</p>
+        <p id="map-instructions">Drag to look around, tap once for a waypoint, tap twice to clear it.</p>
       </div>
       <div class="map-canvas-wrap">
         <canvas id="map-canvas" width="480" height="480"></canvas>
       </div>
       <div class="map-footer">
+        <button id="btn-map-zoom-out" class="small-button">🔍−</button>
+        <button id="btn-map-zoom-in" class="small-button">🔍+</button>
         <button id="btn-clear-waypoint" class="small-button">Clear Waypoint</button>
         <button class="close-button-big" data-close="map">✕ Close Map</button>
       </div>

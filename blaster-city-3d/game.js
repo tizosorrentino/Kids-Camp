@@ -470,10 +470,21 @@
       wR.rotation.z = -0.4;
       group.add(wL, wR);
     } else if (cfg.accessory === 'chain') {
-      const chain = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.02, 8, 16), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8, roughness: 0.2 }));
-      chain.position.set(0, 1.38, 0.15);
-      chain.rotation.x = Math.PI / 2 - 0.35;
-      group.add(chain);
+      // A collar loop at the neck with a thin strand hanging down to a
+      // pendant on the chest, instead of a single flat ring that just
+      // looked like a straight bar sitting on the collarbone.
+      const chainMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8, roughness: 0.2 });
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.018, 8, 16), chainMat);
+      collar.position.set(0, 1.43, 0.13);
+      collar.rotation.x = Math.PI / 2.3;
+      group.add(collar);
+      const strand = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 6), chainMat);
+      strand.position.set(0, 1.3, 0.19);
+      strand.rotation.x = 0.35;
+      group.add(strand);
+      const pendant = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), chainMat);
+      pendant.position.set(0, 1.17, 0.22);
+      group.add(pendant);
     }
 
     group.userData.armL = armL;
@@ -1657,7 +1668,7 @@
       x: 4, z: 10, heading: 0, speed: 0,
       walking: false,
       bobPhase: 0,
-      y: 0, vy: 0, grounded: true, jumpsUsed: 0, jumpRequest: false,
+      y: 0, vy: 0, grounded: true, jumpsUsed: 0, jumpRequest: false, fallFromY: 0,
     };
     playerMesh.position.set(player.x, 0, player.z);
   }
@@ -1909,10 +1920,24 @@
     $('btn-enter').addEventListener('pointerdown', () => tryEnterExitVehicle());
     $('btn-jump').addEventListener('pointerdown', () => { player.jumpRequest = true; });
 
-    $('btn-phone').addEventListener('click', openPhone);
-    $('btn-map').addEventListener('click', openMap);
-    $('btn-weapons').addEventListener('click', openWeaponWheel);
+    // Everything (phone/map/weapons/aim-marker) lives behind one small
+    // "Items" button now instead of four separate icons — tap it to open
+    // a little dropdown, tap an item to use it (which also closes the menu).
+    const itemsMenu = $('items-menu');
+    $('btn-items').addEventListener('click', (e) => {
+      e.stopPropagation();
+      itemsMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+      if (!itemsMenu.classList.contains('hidden') && !itemsMenu.contains(e.target) && e.target.id !== 'btn-items') {
+        itemsMenu.classList.add('hidden');
+      }
+    });
+    $('btn-phone').addEventListener('click', () => { itemsMenu.classList.add('hidden'); openPhone(); });
+    $('btn-map').addEventListener('click', () => { itemsMenu.classList.add('hidden'); openMap(); });
+    $('btn-weapons').addEventListener('click', () => { itemsMenu.classList.add('hidden'); openWeaponWheel(); });
     $('btn-aim-marker').addEventListener('click', () => {
+      itemsMenu.classList.add('hidden');
       state.aimMarkerOn = !state.aimMarkerOn;
     });
     $('btn-clear-waypoint').addEventListener('click', () => {
@@ -1920,6 +1945,8 @@
       $('waypoint-info').classList.add('hidden');
       toast('Waypoint cleared.');
     });
+    $('btn-map-zoom-in').addEventListener('click', () => { setMapZoom(mapZoom + 0.5); });
+    $('btn-map-zoom-out').addEventListener('click', () => { setMapZoom(mapZoom - 0.5); });
   }
 
   function keyboardMove() {
@@ -2257,6 +2284,11 @@
   const mapCtx = mapCanvas.getContext('2d');
 
   function openMap() {
+    // Re-center on the player and reset zoom every time the map is opened,
+    // so it always starts showing where you actually are.
+    mapCenterX = player.x;
+    mapCenterZ = player.z;
+    mapZoom = 1;
     drawMap();
     showOverlay(mapOverlay);
   }
@@ -2264,11 +2296,32 @@
   // Wider than the city grid alone so the military base (out past the
   // east edge) still shows up on the full map instead of being clipped off.
   const MAP_HALF = WORLD_HALF + 220;
+  const MAP_ZOOM_MIN = 1, MAP_ZOOM_MAX = 5;
+  let mapZoom = 1;
+  let mapCenterX = 0, mapCenterZ = 0;
 
+  function setMapZoom(z) {
+    mapZoom = Math.max(MAP_ZOOM_MIN, Math.min(MAP_ZOOM_MAX, z));
+    drawMap();
+  }
+
+  // The visible half-extent shrinks as you zoom in, and the view is
+  // centered on mapCenterX/Z (which panning drags around) instead of
+  // always being the whole world — this is what lets you zoom in on
+  // whatever part of the map you actually want to see.
   function worldToMapPx(x, z, size) {
+    const half = MAP_HALF / mapZoom;
     return {
-      px: ((x + MAP_HALF) / (MAP_HALF * 2)) * size,
-      py: ((z + MAP_HALF) / (MAP_HALF * 2)) * size,
+      px: ((x - mapCenterX + half) / (half * 2)) * size,
+      py: ((z - mapCenterZ + half) / (half * 2)) * size,
+    };
+  }
+
+  function mapPxToWorld(px, py, size) {
+    const half = MAP_HALF / mapZoom;
+    return {
+      x: (px / size) * (half * 2) - half + mapCenterX,
+      z: (py / size) * (half * 2) - half + mapCenterZ,
     };
   }
 
@@ -2384,18 +2437,60 @@
     mapCtx.closePath(); mapCtx.fill();
   }
 
+  // Drag to pan around (so you can zoom in on whatever part of the map you
+  // want to look at), plain tap to drop a waypoint there, and a quick
+  // second tap (a real double-tap, not just a drag) clears it again.
+  let mapPointerDown = null;
+  let mapPanStart = null;
+  let mapLastTapTime = 0;
+  let mapLastTapScreen = null;
+
   mapCanvas.addEventListener('pointerdown', (e) => {
-    const rect = mapCanvas.getBoundingClientRect();
-    const scale = mapCanvas.width / rect.width;
-    const px = (e.clientX - rect.left) * scale;
-    const py = (e.clientY - rect.top) * scale;
-    const wx = (px / mapCanvas.width) * (MAP_HALF * 2) - MAP_HALF;
-    const wz = (py / mapCanvas.height) * (MAP_HALF * 2) - MAP_HALF;
-    state.waypoint = { x: wx, z: wz };
-    $('waypoint-info').classList.remove('hidden');
-    drawMap();
-    toast('📍 Waypoint set!');
+    mapPointerDown = { x: e.clientX, y: e.clientY, moved: false };
+    mapPanStart = { x: mapCenterX, z: mapCenterZ };
   });
+
+  mapCanvas.addEventListener('pointermove', (e) => {
+    if (!mapPointerDown) return;
+    const dx = e.clientX - mapPointerDown.x, dy = e.clientY - mapPointerDown.y;
+    if (!mapPointerDown.moved && Math.hypot(dx, dy) > 6) mapPointerDown.moved = true;
+    if (mapPointerDown.moved) {
+      const rect = mapCanvas.getBoundingClientRect();
+      const worldPerPx = (MAP_HALF / mapZoom * 2) / rect.width;
+      mapCenterX = mapPanStart.x - dx * worldPerPx;
+      mapCenterZ = mapPanStart.z - dy * worldPerPx;
+      drawMap();
+    }
+  });
+
+  function mapPointerUp(e) {
+    if (!mapPointerDown) return;
+    if (!mapPointerDown.moved) {
+      const rect = mapCanvas.getBoundingClientRect();
+      const scale = mapCanvas.width / rect.width;
+      const px = (e.clientX - rect.left) * scale;
+      const py = (e.clientY - rect.top) * scale;
+      const w = mapPxToWorld(px, py, mapCanvas.width);
+      const now = performance.now();
+      const screenDist = mapLastTapScreen ? Math.hypot(e.clientX - mapLastTapScreen.x, e.clientY - mapLastTapScreen.y) : Infinity;
+      if (now - mapLastTapTime < 550 && screenDist < 40) {
+        state.waypoint = null;
+        $('waypoint-info').classList.add('hidden');
+        toast('📍 Waypoint cleared');
+        mapLastTapTime = 0;
+      } else {
+        state.waypoint = { x: w.x, z: w.z };
+        $('waypoint-info').classList.remove('hidden');
+        toast('📍 Waypoint set!');
+        mapLastTapTime = now;
+        mapLastTapScreen = { x: e.clientX, y: e.clientY };
+      }
+      drawMap();
+    }
+    mapPointerDown = null;
+  }
+  mapCanvas.addEventListener('pointerup', mapPointerUp);
+  mapCanvas.addEventListener('pointercancel', () => { mapPointerDown = null; });
 
   // ------------------------------------------------------------
   // Minimap (always-on radar, top-left HUD)
@@ -2806,6 +2901,7 @@
     // Jump / gravity — a tap starts the first jump, a second tap while
     // airborne is a much higher double jump, high enough to reach onto
     // shorter rooftops (see getFloorHeightAt / collidesWithBuildingsAtHeight).
+    const wasGrounded = player.grounded;
     if (player.jumpRequest) {
       player.jumpRequest = false;
       if (player.jumpsUsed < 2) {
@@ -2824,6 +2920,16 @@
       player.jumpsUsed = 0;
     } else {
       player.grounded = false;
+    }
+
+    // Fall damage: only for a real drop (e.g. walking off a rooftop edge),
+    // not for jumping and landing back at the same height — fallFromY is
+    // set the moment you leave solid ground, so a jump's up-then-down to
+    // the same spot nets to ~0 fall distance and never costs health.
+    if (wasGrounded && !player.grounded) {
+      player.fallFromY = player.y;
+    } else if (!wasGrounded && player.grounded) {
+      if ((player.fallFromY || 0) - player.y > 3) damagePlayer(5);
     }
 
     const clampR = worldClampR();
