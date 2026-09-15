@@ -95,6 +95,7 @@
     nearApartment: null,
     nearFoodStall: null,
     aimMarkerOn: false,
+    sprinting: false,
     hasBaseAccess: false,
     lastShotTime: 0,
   };
@@ -1083,7 +1084,7 @@
       const mesh = makeJetMesh();
       mesh.position.set(pos[0], 0, pos[1]);
       scene.add(mesh);
-      vehicles.push({ mesh, x: pos[0], z: pos[1], heading: Math.PI, speed: 0, occupied: false, type: 'jet' });
+      vehicles.push({ mesh, x: pos[0], z: pos[1], heading: Math.PI, speed: 0, occupied: false, type: 'jet', altitude: 0 });
     });
 
     // Recruiter kiosk, just outside the gate on the city side
@@ -1885,7 +1886,7 @@
   // INPUT
   // ==============================================================
   const keys = {};
-  const input = { moveX: 0, moveY: 0, fire: false, enter: false, jump: false };
+  const input = { moveX: 0, moveY: 0, fire: false, enter: false, jump: false, flyUp: false, flyDown: false };
   let lookDeltaX = 0, lookDeltaY = 0;
 
   function setupInput() {
@@ -1894,13 +1895,20 @@
       if (e.code === 'KeyE') tryEnterExitVehicle();
       if (e.code === 'Space') { e.preventDefault(); fireWeapon(); }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') player.jumpRequest = true;
+      if (e.code === 'KeyC') toggleSprint();
+      if (e.code === 'KeyR') input.flyUp = true;
+      if (e.code === 'KeyF') input.flyDown = true;
       if (e.code >= 'Digit1' && e.code <= 'Digit6') {
         const idx = parseInt(e.code.slice(-1), 10) - 1;
         const owned = WEAPONS.filter((w) => state.ownedWeapons.includes(w.id));
         if (owned[idx]) equipWeapon(owned[idx].id);
       }
     });
-    window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+    window.addEventListener('keyup', (e) => {
+      keys[e.code] = false;
+      if (e.code === 'KeyR') input.flyUp = false;
+      if (e.code === 'KeyF') input.flyDown = false;
+    });
 
     renderer.domElement.addEventListener('mousedown', (e) => {
       if (e.button === 0) fireWeapon();
@@ -1954,6 +1962,11 @@
     $('btn-fire').addEventListener('pointerup', () => { input.fire = false; });
     $('btn-enter').addEventListener('pointerdown', () => tryEnterExitVehicle());
     $('btn-jump').addEventListener('pointerdown', () => { player.jumpRequest = true; });
+    $('btn-sprint').addEventListener('pointerdown', () => toggleSprint());
+    $('btn-fly-up').addEventListener('pointerdown', () => { input.flyUp = true; });
+    $('btn-fly-up').addEventListener('pointerup', () => { input.flyUp = false; });
+    $('btn-fly-down').addEventListener('pointerdown', () => { input.flyDown = true; });
+    $('btn-fly-down').addEventListener('pointerup', () => { input.flyDown = false; });
 
     // Everything (phone/map/weapons/aim-marker) lives behind one small
     // "Items" button now instead of four separate icons — tap it to open
@@ -2004,6 +2017,13 @@
     updateWeaponHUD();
     updateHeldWeaponMesh();
     writeSave();
+  }
+
+  // A toggle, not hold-to-run — tap once to start sprinting and keep
+  // going hands-free, tap again to drop back to a normal walk.
+  function toggleSprint() {
+    state.sprinting = !state.sprinting;
+    $('btn-sprint').classList.toggle('active', state.sprinting);
   }
 
   // Quick-swap with the arrow buttons on the HUD weapon display, so once
@@ -2073,8 +2093,45 @@
     return null;
   }
 
+  // A ray straight through screen-center from the actual camera position
+  // dives into the ground a short distance past the player — the camera
+  // orbits close and pitched down just to keep a nearby subject in frame,
+  // and continuing that exact sightline out further only sinks lower.
+  // So: aim horizontally by cameraYaw (matches drag-look left/right
+  // precisely — no more "anything within ~20°" cone), and aim vertically
+  // by how far cameraPitch has been dragged from its resting angle, at a
+  // much gentler rate — enough to deliberately aim up at a head or down
+  // at the ground, without the ray's height collapsing over distance.
+  // Shared by the player's handheld weapons and vehicle-mounted ones.
+  function raycastHit(originX, originY, originZ, range) {
+    const aimYaw = cameraYaw + Math.PI; // world-space "into the screen" direction, same convention as player.heading
+    const aimDir = new THREE.Vector3(
+      Math.sin(aimYaw),
+      (0.28 - cameraPitch) * 1.1,
+      Math.cos(aimYaw)
+    ).normalize();
+    fireRaycaster.set(new THREE.Vector3(originX, originY, originZ), aimDir);
+    const targetMeshes = [];
+    robots.forEach((bot) => { if (bot.alive) targetMeshes.push(bot.mesh); });
+    pedestrians.forEach((ped) => targetMeshes.push(ped.mesh));
+    const hits = fireRaycaster.intersectObjects(targetMeshes, true);
+    if (hits.length && hits[0].distance <= range) return findEntityFromHit(hits[0].object);
+    return null;
+  }
+
+  function applyHitToEntity(entity, damage) {
+    if (!entity) return false;
+    if (robots.includes(entity)) { applyDamageToRobot(entity, damage); return true; }
+    if (pedestrians.includes(entity)) { splashPedestrian(entity); return true; }
+    return false;
+  }
+
   function fireWeapon() {
-    if (state.inVehicle) return; // no shooting while driving
+    if (state.inVehicle) {
+      const vType = state.inVehicle.type;
+      if (vType === 'tank' || vType === 'jet') fireVehicleWeapon(state.inVehicle);
+      return; // no handheld shooting while driving
+    }
     const w = getWeapon(state.currentWeaponId);
     const now = performance.now() / 1000;
     const cooldown = 1 / w.rate;
@@ -2093,43 +2150,32 @@
     state.lastShotTime = now;
 
     const originX = player.x, originZ = player.z;
-
-    // A ray straight through screen-center from the actual camera position
-    // dives into the ground a short distance past the player — the camera
-    // orbits close and pitched down just to keep a nearby player in frame,
-    // and continuing that exact sightline out further only sinks lower.
-    // So: aim horizontally by cameraYaw (matches drag-look left/right
-    // precisely — no more "anything within ~20°" cone), and aim vertically
-    // by how far cameraPitch has been dragged from its resting angle, at a
-    // much gentler rate — enough to deliberately aim up at a head or down
-    // at the ground, without the ray's height collapsing over distance.
-    const aimYaw = cameraYaw + Math.PI; // world-space "into the screen" direction, same convention as player.heading
-    const aimDir = new THREE.Vector3(
-      Math.sin(aimYaw),
-      (0.28 - cameraPitch) * 1.1,
-      Math.cos(aimYaw)
-    ).normalize();
-    fireRaycaster.set(new THREE.Vector3(originX, cameraFollowY + 1.3, originZ), aimDir);
-    const targetMeshes = [];
-    robots.forEach((bot) => { if (bot.alive) targetMeshes.push(bot.mesh); });
-    pedestrians.forEach((ped) => targetMeshes.push(ped.mesh));
-    const hits = fireRaycaster.intersectObjects(targetMeshes, true);
-
-    let hitSomething = false;
-    if (hits.length && hits[0].distance <= w.range) {
-      const entity = findEntityFromHit(hits[0].object);
-      if (entity && robots.includes(entity)) {
-        applyDamageToRobot(entity, w.damage);
-        hitSomething = true;
-      } else if (entity && pedestrians.includes(entity)) {
-        splashPedestrian(entity);
-        hitSomething = true;
-      }
-    }
+    const entity = raycastHit(originX, cameraFollowY + 1.3, originZ, w.range);
+    applyHitToEntity(entity, w.damage);
     spawnBlasterFX(originX, originZ, player.heading);
-    if (!hitSomething) {
-      // small chance friendly flavor text if aimed at pedestrian
-    }
+  }
+
+  // Non-violent turret weapons for the two combat vehicles at the military
+  // base — a tank firing rubber-ball blasts and a jet with a rapid-fire
+  // "spam" gun — sharing the same aim-and-raycast system as the handheld
+  // blasters instead of any new hit logic. No ammo to track here; these
+  // are vehicle-mounted, not something you carry and refill.
+  const VEHICLE_WEAPONS = {
+    tank: { name: 'Ball Blaster', damage: 40, rate: 1.6, range: 45, color: 0xfacc15 },
+    jet: { name: 'Spam Gun', damage: 8, rate: 14, range: 55, color: 0x38bdf8 },
+  };
+
+  function fireVehicleWeapon(v) {
+    const stats = VEHICLE_WEAPONS[v.type];
+    if (!stats) return;
+    const now = performance.now() / 1000;
+    const cooldown = 1 / stats.rate;
+    if (now - (v.lastShotTime || 0) < cooldown) return;
+    v.lastShotTime = now;
+    const originY = (v.altitude || 0) + 1.2;
+    const entity = raycastHit(v.x, originY, v.z, stats.range);
+    applyHitToEntity(entity, stats.damage);
+    spawnBlasterFX(v.x, v.z, v.heading, { color: stats.color, y: originY });
   }
 
   // Getting splashed is just a startle, not a "hit" — no damage, no reward,
@@ -2141,18 +2187,19 @@
 
   // A small silver pellet with a weapon-colored tip, instead of a glowing
   // orb — reads as a dart/pellet rather than a sci-fi laser bolt.
-  function spawnBlasterFX(x, z, heading) {
-    const w = getWeapon(state.currentWeaponId);
+  function spawnBlasterFX(x, z, heading, opts) {
+    const color = (opts && opts.color !== undefined) ? opts.color : getWeapon(state.currentWeaponId).color;
+    const y = (opts && opts.y !== undefined) ? opts.y : 1.1;
     const fx = new THREE.Group();
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(0.035, 0.045, 0.2, 8),
       new THREE.MeshStandardMaterial({ color: 0xd4d4d8, metalness: 0.7, roughness: 0.25 })
     );
     body.rotation.x = Math.PI / 2;
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), new THREE.MeshStandardMaterial({ color: w.color, roughness: 0.4 }));
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), new THREE.MeshStandardMaterial({ color, roughness: 0.4 }));
     tip.position.set(0, 0, 0.12);
     fx.add(body, tip);
-    fx.position.set(x + Math.sin(heading) * 1.2, 1.1, z + Math.cos(heading) * 1.2);
+    fx.position.set(x + Math.sin(heading) * 1.2, y, z + Math.cos(heading) * 1.2);
     fx.rotation.y = heading;
     scene.add(fx);
     let life = 0;
@@ -3008,7 +3055,7 @@
       // vector; without it, left/right come out mirrored).
       const inputAngle = Math.atan2(-mx, -my);
       player.heading = cameraYaw + Math.PI + inputAngle;
-      const speed = 6.2;
+      const speed = state.sprinting ? 10.5 : 6.2;
       const step = speed * dt * Math.min(mag, 1);
       const nx = player.x + Math.sin(player.heading) * step;
       const nz = player.z + Math.cos(player.heading) * step;
@@ -3116,6 +3163,17 @@
       v.heading += steer * 1.8 * dt * steerFactor;
     }
 
+    // Jets can actually take off — the fly up/down buttons (or R/F) change
+    // altitude, and once high enough they clear buildings entirely instead
+    // of colliding with them; dropping back near the ground re-engages
+    // normal collision, so landing works like landing rather than clipping.
+    if (v.type === 'jet') {
+      const FLY_SPEED = 12;
+      if (input.flyUp) v.altitude = Math.min(80, (v.altitude || 0) + FLY_SPEED * dt);
+      if (input.flyDown) v.altitude = Math.max(0, (v.altitude || 0) - FLY_SPEED * dt);
+    }
+    const flying = v.type === 'jet' && (v.altitude || 0) > 3;
+
     const preCrashSpeed = v.speed;
     const nx = v.x + Math.sin(v.heading) * v.speed * dt;
     const nz = v.z + Math.cos(v.heading) * v.speed * dt;
@@ -3123,8 +3181,8 @@
     // can't be driven up onto the sand or back into the city.
     const onLand = (x, z) => v.type === 'jetski' && z < oceanStartZ;
     let hitWall = false;
-    if (!collidesWithBuildings(nx, v.z, 1.4) && !blockedByMilitaryGate(nx, v.z) && !onLand(nx, v.z)) v.x = nx; else { v.speed *= 0.15; hitWall = true; }
-    if (!collidesWithBuildings(v.x, nz, 1.4) && !blockedByMilitaryGate(v.x, nz) && !onLand(v.x, nz)) v.z = nz; else { v.speed *= 0.15; hitWall = true; }
+    if (flying || (!collidesWithBuildings(nx, v.z, 1.4) && !blockedByMilitaryGate(nx, v.z) && !onLand(nx, v.z))) v.x = nx; else { v.speed *= 0.15; hitWall = true; }
+    if (flying || (!collidesWithBuildings(v.x, nz, 1.4) && !blockedByMilitaryGate(v.x, nz) && !onLand(v.x, nz))) v.z = nz; else { v.speed *= 0.15; hitWall = true; }
     if (hitWall && Math.abs(preCrashSpeed) > 6) triggerCrashFx(Math.abs(preCrashSpeed), v);
 
     // Cars used to just drive straight through each other — bump into one
@@ -3147,10 +3205,12 @@
     v.x = Math.max(-clampR, Math.min(clampR, v.x));
     v.z = Math.max(-clampR, Math.min(clampR, v.z));
 
-    v.mesh.position.set(v.x, 0, v.z);
+    v.mesh.position.set(v.x, v.altitude || 0, v.z);
     v.mesh.rotation.y = v.heading;
+    v.mesh.rotation.x = v.type === 'jet' ? (input.flyUp ? -0.15 : input.flyDown ? 0.15 : 0) : 0;
 
     player.x = v.x; player.z = v.z; player.heading = v.heading;
+    player.y = v.altitude || 0; // lets the camera rise with the jet — see cameraFollowY in updateCamera
 
     updateVehicleSmoke(v, dt);
 
@@ -3479,6 +3539,9 @@
     drawMinimap();
     updateCompassAndWaypointInfo();
     if (playerAimMarker) playerAimMarker.visible = state.aimMarkerOn && !state.inVehicle;
+    const inJet = !!state.inVehicle && state.inVehicle.type === 'jet';
+    $('btn-fly-up').classList.toggle('hidden', !inJet);
+    $('btn-fly-down').classList.toggle('hidden', !inJet);
 
     renderer.render(scene, camera);
   }
@@ -3507,8 +3570,8 @@
     set cameraYaw(v) { cameraYaw = v; },
     fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
     getFloorHeightAt, getMountainHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment,
-    restAtApartment, buyFood, cycleWeapon,
-    CONTACTS, WEAPONS,
+    restAtApartment, buyFood, cycleWeapon, toggleSprint,
+    CONTACTS, WEAPONS, VEHICLE_WEAPONS,
   };
 
 })();

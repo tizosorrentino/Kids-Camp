@@ -564,6 +564,11 @@ html, body {
   border-color: #f87171;
 }
 
+.action-button.active {
+  background: rgba(34,211,238,0.35);
+  border-color: #22d3ee;
+}
+
 #controls-hint {
   position: absolute;
   bottom: 4px;
