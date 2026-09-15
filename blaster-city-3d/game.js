@@ -27,6 +27,7 @@
         ownedWeapons: state.ownedWeapons,
         currentWeaponId: state.currentWeaponId,
         ammo: state.ammo,
+        reloads: state.reloads,
         character: state.character,
         hasBaseAccess: state.hasBaseAccess,
         apartmentsOwned: apartments.map((a) => a.owned),
@@ -47,6 +48,7 @@
     { id: 'mega', name: 'Mega Soaker 9000', icon: '🚀', price: 1500, damage: 100, rate: 1.6, range: 40, color: 0xfb923c, splash: 6 },
   ];
   const MAX_AMMO = 20; // fists don't need ammo — everything else has to be refilled at the shop
+  const MAX_RELOADS = 20; // an empty mag auto-reloads on its own up to this many times before a shop trip is required
 
   const SKIN_TONES = [0xffdbb4, 0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0x5a3825];
   const SHIRT_COLORS = [0xef4444, 0x3b82f6, 0x22c55e, 0xf59e0b, 0xa855f7, 0x111827, 0xec4899, 0xffffff];
@@ -62,6 +64,7 @@
     { id: 'pete', name: 'Pizza Pete', icon: '🍕', line: 'Deliver a pizza across town before it gets cold!', mission: 'DELIVERY', reward: [120, 200] },
     { id: 'ace', name: 'Ace the Racer', icon: '🏁', line: 'Race to the checkpoint before time runs out!', mission: 'RACE', reward: [150, 260] },
     { id: 'watch', name: 'Robot Watch', icon: '🤖', line: 'Bust 3 glitching robots causing trouble downtown!', mission: 'BOUNTY', reward: [180, 300] },
+    { id: 'agent', name: 'Agent Rivera', icon: '🕵️', line: 'Robbers are holed up with a stash of fake cash — bust all 3, then burn the stash!', mission: 'FAKE_CASH', reward: [560, 560] },
   ];
 
   // ------------------------------------------------------------
@@ -72,6 +75,7 @@
     ownedWeapons: ['fists', 'water'],
     currentWeaponId: 'water',
     ammo: { water: MAX_AMMO },
+    reloads: { water: MAX_RELOADS },
     character: {
       skin: SKIN_TONES[0],
       shirt: SHIRT_COLORS[1],
@@ -94,6 +98,12 @@
     nearRecruiter: false,
     nearApartment: null,
     nearFoodStall: null,
+    nearRide: null,
+    riding: null, // {kind, anchor, elapsed, duration, returnPos}
+    nearCashPile: false,
+    apartmentInterior: null, // {apt} while inside
+    nearTV: false,
+    tvOn: false,
     aimMarkerOn: false,
     sprinting: false,
     wantedStars: 0,
@@ -112,7 +122,12 @@
     state.ownedWeapons = Array.isArray(saved.ownedWeapons) && saved.ownedWeapons.length ? saved.ownedWeapons : state.ownedWeapons;
     state.currentWeaponId = saved.currentWeaponId || state.currentWeaponId;
     if (saved.ammo && typeof saved.ammo === 'object') Object.assign(state.ammo, saved.ammo);
-    state.ownedWeapons.forEach((id) => { if (id !== 'fists' && state.ammo[id] === undefined) state.ammo[id] = MAX_AMMO; });
+    if (saved.reloads && typeof saved.reloads === 'object') Object.assign(state.reloads, saved.reloads);
+    state.ownedWeapons.forEach((id) => {
+      if (id === 'fists') return;
+      if (state.ammo[id] === undefined) state.ammo[id] = MAX_AMMO;
+      if (state.reloads[id] === undefined) state.reloads[id] = MAX_RELOADS;
+    });
     if (saved.character) Object.assign(state.character, saved.character);
     if (Array.isArray(saved.apartmentsOwned)) pendingApartmentsOwned = saved.apartmentsOwned;
   }
@@ -638,13 +653,25 @@
   let apartments = []; // {x, z, price, owned}
   let foodStalls = []; // {x, z, kind, price, cooldownUntil}
   let rides = []; // {group, axis, speed} — ferris wheel / carousel spin animation
+  let ferrisWheelGroup = null, carouselDiscGroup = null;
+  let ferrisRidePos = null, carouselRidePos = null;
   let beachCenter = null;
   let carnivalCenter = null;
   let oceanMesh = null;
   let oceanBaseZ = null;
   let oceanTime = 0;
   let oceanStartZ = Infinity; // z where sand ends and water begins — keeps jet skis off the sand
+  let oceanFarZ = -Infinity; // far edge of open water, past which it's not ocean anymore
+  let oceanHalfWidth = 0;
   let beachClampR = 0; // lets the world-bounds clamp reach the far edge of the ocean
+  const SWIM_STROKE_VELOCITY = 5; // upward kick from one jump-press while swimming
+  const SWIM_SINK_ACCEL = 8;
+  const SWIM_MAX_SINK_SPEED = 2.2;
+  const SWIM_SURFACE_Y = 0.3;
+  const SWIM_MAX_DEPTH = -8;
+  function isInOcean(x, z) {
+    return z > oceanStartZ && z < oceanFarZ && Math.abs(x) < oceanHalfWidth;
+  }
   let mountainPeaks = [];
   let mountainZ = 0;
   let mountainClampR = 0;
@@ -669,6 +696,16 @@
   let savedOutdoorPos = null;
   let savedCameraYaw = Math.PI, savedCameraPitch = 0.28;
 
+  // ------------------------------------------------------------
+  // Apartment interior — a single shared cozy room (couch + TV), reused by
+  // whichever owned apartment the player walks into. Same first-person /
+  // interior-walls-as-collision approach as the bank vault room above.
+  // ------------------------------------------------------------
+  const APARTMENT_INTERIOR = { x: 400, z: -420 };
+  const APT_ROOM_W = 14, APT_ROOM_D = 12, APT_ROOM_H = 5;
+  let apartmentInteriorEntranceZ = 0;
+  let tvScreenMesh = null;
+
   function startGameWorld() {
     if (gameStarted) return;
     gameStarted = true;
@@ -678,6 +715,7 @@
     buildMountains();
     buildBeachCarnival();
     buildBankInterior();
+    buildApartmentInterior();
     if (pendingApartmentsOwned) {
       apartments.forEach((a, i) => { if (pendingApartmentsOwned[i]) a.owned = true; });
     }
@@ -1230,12 +1268,14 @@
     // clear of the water — not built out over it on a dock.
     carnivalCenter = { x: 110, z: (sandNear + sandFar) / 2 };
     oceanStartZ = sandFar;
+    oceanFarZ = waterFar;
     beachClampR = waterFar + 15; // lets the player/jet skis actually reach the new, bigger ocean
 
     // Sand and ocean are both wide enough to fully cover the grass ground
     // plane behind them — narrower planes used to leave grass visible
     // flanking the beach at the edges of the view.
     const COAST_WIDTH = 480;
+    oceanHalfWidth = COAST_WIDTH / 2;
 
     // Sand
     const sandMat = new THREE.MeshStandardMaterial({ color: 0xe9d5a1, roughness: 1 });
@@ -1318,6 +1358,8 @@
     ferris.group.position.set(carnivalCenter.x - 9, 0, carnivalCenter.z);
     scene.add(ferris.group);
     rides.push({ group: ferris.wheelGroup, axis: 'z', speed: 0.22 });
+    ferrisWheelGroup = ferris.wheelGroup;
+    ferrisRidePos = { x: carnivalCenter.x - 9, z: carnivalCenter.z };
 
     // Carousel
     const carousel = makeCarouselGroup();
@@ -1325,6 +1367,8 @@
     carousel.group.position.set(carnivalCenter.x + 10, 0, carnivalCenter.z);
     scene.add(carousel.group);
     rides.push({ group: carousel.discGroup, axis: 'y', speed: 0.55 });
+    carouselDiscGroup = carousel.discGroup;
+    carouselRidePos = { x: carnivalCenter.x + 10, z: carnivalCenter.z };
 
     // Food stalls
     const stallSpots = [
@@ -1553,6 +1597,63 @@
     toast(`${info.emoji} Bought a ${info.name}! +15 health`, 2200);
   }
 
+  // ------------------------------------------------------------
+  // Carnival rides — buy a ticket, get carried along by the actual
+  // spinning Ferris wheel / carousel geometry (via a rider anchor parented
+  // to the same rotating group everything else visually spins on), then
+  // dropped back off where you got on once the ride's over.
+  // ------------------------------------------------------------
+  const RIDE_PRICES = { ferris: 15, carousel: 10 };
+  const RIDE_DURATIONS = { ferris: 20, carousel: 14 };
+
+  function startRide(kind) {
+    const price = RIDE_PRICES[kind];
+    if (state.money < price) {
+      toast(`🎟️ You need $${price} for a ticket.`, 1800);
+      return;
+    }
+    state.money -= price;
+    updateHUDMoney();
+    writeSave();
+
+    const anchor = new THREE.Object3D();
+    if (kind === 'ferris') {
+      anchor.position.set(6.5, 0, 0); // matches one of the wheel's gondolas
+      ferrisWheelGroup.add(anchor);
+    } else {
+      anchor.position.set(3.2, 1.5, 0); // matches one of the carousel's horses
+      carouselDiscGroup.add(anchor);
+    }
+
+    state.riding = {
+      kind, anchor, elapsed: 0, duration: RIDE_DURATIONS[kind],
+      returnPos: { x: player.x, z: player.z, y: player.y, heading: player.heading },
+    };
+    playerMesh.visible = false;
+    toast(kind === 'ferris' ? '🎡 Tickets, please — enjoy the view!' : '🎠 Whee! Hang on tight!', 2000);
+  }
+
+  function updateRide(dt) {
+    const r = state.riding;
+    if (!r) return;
+    r.elapsed += dt;
+    const worldPos = new THREE.Vector3();
+    r.anchor.getWorldPosition(worldPos);
+    player.x = worldPos.x; player.y = worldPos.y; player.z = worldPos.z;
+    if (r.elapsed >= r.duration) endRide();
+  }
+
+  function endRide() {
+    const r = state.riding;
+    if (!r) return;
+    r.anchor.parent.remove(r.anchor);
+    player.x = r.returnPos.x; player.z = r.returnPos.z; player.y = r.returnPos.y; player.heading = r.returnPos.heading;
+    player.vy = 0; player.grounded = true;
+    playerMesh.visible = true;
+    state.riding = null;
+    toast('🎡 Ride over — thanks for coming!', 2000);
+  }
+
   function makeTankMesh() {
     const group = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.75 });
@@ -1714,7 +1815,7 @@
       x: 4, z: 10, heading: 0, speed: 0,
       walking: false,
       bobPhase: 0,
-      y: 0, vy: 0, grounded: true, jumpsUsed: 0, jumpRequest: false, fallFromY: 0,
+      y: 0, vy: 0, grounded: true, jumpsUsed: 0, jumpRequest: false, fallFromY: 0, swimming: false,
     };
     playerMesh.position.set(player.x, 0, player.z);
   }
@@ -2101,8 +2202,9 @@
       ammoEl.classList.remove('low');
     } else {
       const ammo = state.ammo[w.id] || 0;
-      ammoEl.textContent = `${ammo}/${MAX_AMMO}`;
-      ammoEl.classList.toggle('low', ammo === 0);
+      const reloads = state.reloads[w.id] || 0;
+      ammoEl.textContent = `${ammo}/${MAX_AMMO} 🔄${reloads}`;
+      ammoEl.classList.toggle('low', ammo === 0 && reloads === 0);
     }
   }
 
@@ -2161,6 +2263,7 @@
     robots.forEach((bot) => { if (bot.alive) targetMeshes.push(bot.mesh); });
     pedestrians.forEach((ped) => targetMeshes.push(ped.mesh));
     if (state.bankHeist) state.bankHeist.guards.forEach((g) => { if (g.alive) targetMeshes.push(g.mesh); });
+    missionRobbers.forEach((r) => { if (r.alive) targetMeshes.push(r.mesh); });
     const hits = fireRaycaster.intersectObjects(targetMeshes, true);
     if (hits.length && hits[0].distance <= range) return findEntityFromHit(hits[0].object);
     return null;
@@ -2171,6 +2274,7 @@
     if (robots.includes(entity)) { applyDamageToRobot(entity, damage); return true; }
     if (pedestrians.includes(entity)) { splashPedestrian(entity); return true; }
     if (state.bankHeist && state.bankHeist.guards.includes(entity)) { splashGuard(entity, damage); return true; }
+    if (missionRobbers.includes(entity)) { bustMissionRobber(entity, damage); return true; }
     return false;
   }
 
@@ -2188,10 +2292,20 @@
     if (w.id !== 'fists') {
       const ammo = state.ammo[w.id] || 0;
       if (ammo <= 0) {
-        toast(`${w.icon} Out of ammo! Refill at the Blaster Shop 💦`, 1800);
+        toast(`${w.icon} Out of ammo and out of reloads! Buy more at the Blaster Shop 💦`, 2000);
         return;
       }
-      state.ammo[w.id] = ammo - 1;
+      const remaining = ammo - 1;
+      // An empty mag auto-reloads on the spot, as long as there's a reload
+      // left in reserve — only once BOTH ammo and reloads hit zero does a
+      // shop trip actually become necessary.
+      if (remaining <= 0 && (state.reloads[w.id] || 0) > 0) {
+        state.reloads[w.id] -= 1;
+        state.ammo[w.id] = MAX_AMMO;
+        toast(`🔄 Reloaded! ${state.reloads[w.id]} reload${state.reloads[w.id] === 1 ? '' : 's'} left`, 1600);
+      } else {
+        state.ammo[w.id] = remaining;
+      }
       updateWeaponHUD();
       writeSave();
     }
@@ -2308,7 +2422,7 @@
     WEAPONS.forEach((w) => {
       const owned = state.ownedWeapons.includes(w.id);
       const equipped = state.currentWeaponId === w.id;
-      const ammoText = w.id === 'fists' ? '' : ` &middot; Ammo ${owned ? (state.ammo[w.id] || 0) : MAX_AMMO}/${MAX_AMMO}`;
+      const ammoText = w.id === 'fists' ? '' : ` &middot; Ammo ${owned ? (state.ammo[w.id] || 0) : MAX_AMMO}/${MAX_AMMO} &middot; Reloads ${owned ? (state.reloads[w.id] || 0) : MAX_RELOADS}/${MAX_RELOADS}`;
       const row = document.createElement('div');
       row.className = 'item-row';
       row.innerHTML = `
@@ -2343,6 +2457,7 @@
           state.ownedWeapons.push(w.id);
           state.currentWeaponId = w.id;
           state.ammo[w.id] = MAX_AMMO;
+          state.reloads[w.id] = MAX_RELOADS;
           updateHUDMoney();
           updateWeaponHUD();
           writeSave();
@@ -2351,9 +2466,11 @@
         });
         actionDiv.appendChild(btn);
       }
-      // Refilling is available any time it's owned and not full, whether
-      // or not it's the one currently equipped.
-      if (owned && w.id !== 'fists' && (state.ammo[w.id] || 0) < MAX_AMMO) {
+      // Refilling is available any time it's owned and not topped up on
+      // either ammo or reloads, whether or not it's the one currently
+      // equipped — this is the only way to top reloads back up once an
+      // empty mag has burned through all of them.
+      if (owned && w.id !== 'fists' && ((state.ammo[w.id] || 0) < MAX_AMMO || (state.reloads[w.id] || 0) < MAX_RELOADS)) {
         const refillBtn = document.createElement('button');
         refillBtn.textContent = `Refill $${REFILL_COST}`;
         refillBtn.className = 'buy';
@@ -2362,10 +2479,11 @@
           if (state.money < REFILL_COST) return;
           state.money -= REFILL_COST;
           state.ammo[w.id] = MAX_AMMO;
+          state.reloads[w.id] = MAX_RELOADS;
           updateHUDMoney();
           updateWeaponHUD();
           writeSave();
-          toast(`${w.icon} Refilled!`, 1400);
+          toast(`${w.icon} Refilled — ammo and reloads topped up!`, 1600);
           renderShop();
         });
         actionDiv.appendChild(refillBtn);
@@ -2441,13 +2559,14 @@
     const spot = randomOpenSpot(2);
     state.mission = {
       type: contact.mission, contactName: contact.name, reward,
-      marker: spot, progress: 0, needed: contact.mission === 'BOUNTY' ? 3 : 1,
+      marker: spot, progress: 0, needed: (contact.mission === 'BOUNTY' || contact.mission === 'FAKE_CASH') ? 3 : 1,
     };
     state.waypoint = { x: spot.x, z: spot.z };
     $('waypoint-info').classList.remove('hidden');
     const statusEl = $('phone-call-status');
     statusEl.textContent = `📞 ${contact.name}: "${contact.line}" A waypoint has been marked on your map!`;
     statusEl.classList.remove('hidden');
+    if (contact.mission === 'FAKE_CASH') spawnFakeCashHideout(spot);
     updateMissionBanner();
     setTimeout(() => hideOverlay(phoneOverlay), 1400);
     toast(`New mission from ${contact.name}!`);
@@ -2461,7 +2580,11 @@
     let label;
     if (m.type === 'DELIVERY') label = `🍕 Delivery: drive to the marker — reward $${m.reward}`;
     else if (m.type === 'RACE') label = `🏁 Race: reach the checkpoint — reward $${m.reward}`;
-    else label = `🤖 Bounty: bust ${m.needed - m.progress} more robot(s) — reward $${m.reward}`;
+    else if (m.type === 'FAKE_CASH') {
+      label = m.progress < m.needed
+        ? `🕵️ Bust ${m.needed - m.progress} more robber(s) — reward $${m.reward}`
+        : `🔥 All robbers busted — go burn the fake cash! — reward $${m.reward}`;
+    } else label = `🤖 Bounty: bust ${m.needed - m.progress} more robot(s) — reward $${m.reward}`;
     textEl.textContent = label;
     banner.classList.remove('hidden');
   }
@@ -2488,9 +2611,115 @@
 
   function checkMissionArrival() {
     if (!state.mission || !state.waypoint) return;
-    if (state.mission.type === 'BOUNTY') return; // handled on bust
+    if (state.mission.type === 'BOUNTY' || state.mission.type === 'FAKE_CASH') return; // handled on bust / burn
     const dx = state.waypoint.x - player.x, dz = state.waypoint.z - player.z;
     if (Math.hypot(dx, dz) < 4) completeMission();
+  }
+
+  // ------------------------------------------------------------
+  // "Bust the robbers, burn the fake cash" mission — three armed-with-
+  // water-blasters robbers guard a stash at the marker; splash all three
+  // (same non-lethal hit system as everything else) and then walk up to
+  // the cash pile to torch it and collect the reward.
+  // ------------------------------------------------------------
+  let missionRobbers = [];
+  let missionCashPile = null;
+
+  function makeRobberMesh() {
+    const cfg = {
+      skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
+      shirt: 0x44403c, pants: 0x1c1917, hat: 'cap', accessory: 'none',
+      hairStyle: 'short', hairColor: HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)],
+      top: 'jacket', bottom: 'pants',
+    };
+    const mesh = buildCharacterMesh(cfg);
+    mesh.traverse((c) => { c.castShadow = true; });
+    return mesh;
+  }
+
+  function makeCashPileMesh() {
+    const group = new THREE.Group();
+    const billMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.6 });
+    for (let i = 0; i < 5; i++) {
+      const bill = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.35), billMat);
+      bill.position.set((Math.random() - 0.5) * 0.3, 0.05 + i * 0.09, (Math.random() - 0.5) * 0.3);
+      bill.rotation.y = Math.random() * 0.6;
+      group.add(bill);
+    }
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function spawnFakeCashHideout(spot) {
+    for (let i = 0; i < 3; i++) {
+      const angle = (i / 3) * Math.PI * 2;
+      const rx = spot.x + Math.cos(angle) * 4, rz = spot.z + Math.sin(angle) * 4;
+      const mesh = makeRobberMesh();
+      mesh.position.set(rx, 0, rz);
+      scene.add(mesh);
+      const robber = { mesh, x: rx, z: rz, heading: 0, hp: 30, alive: true, lastShotTime: 0 };
+      mesh.userData.entityRef = robber;
+      missionRobbers.push(robber);
+    }
+    const cashMesh = makeCashPileMesh();
+    cashMesh.position.set(spot.x, 0, spot.z);
+    scene.add(cashMesh);
+    missionCashPile = { x: spot.x, z: spot.z, mesh: cashMesh };
+    addFloatingSign(spot.x, 3, spot.z, '🕵️ HIDEOUT');
+  }
+
+  function bustMissionRobber(robber, dmg) {
+    robber.hp -= dmg;
+    robber.fleeing = true;
+    if (robber.hp <= 0 && robber.alive) {
+      robber.alive = false;
+      robber.mesh.rotation.z = Math.PI / 2;
+      robber.mesh.position.y = 0.3;
+      toast('💦 Robber busted!', 1400);
+      if (state.mission && state.mission.type === 'FAKE_CASH') {
+        state.mission.progress += 1;
+        updateMissionBanner();
+      }
+    }
+  }
+
+  function updateMissionRobbers(dt) {
+    missionRobbers.forEach((r) => {
+      if (!r.alive) return;
+      const dx = player.x - r.x, dz = player.z - r.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 16) {
+        r.heading = Math.atan2(dx, dz);
+        const speed = 3.4;
+        const nx = r.x + Math.sin(r.heading) * speed * dt;
+        const nz = r.z + Math.cos(r.heading) * speed * dt;
+        if (!collidesWithBuildings(nx, nz, 0.6)) { r.x = nx; r.z = nz; }
+        r.mesh.position.set(r.x, 0, r.z);
+        r.mesh.rotation.y = r.heading;
+        if (dist < 3) {
+          const now = performance.now() / 1000;
+          if (now - r.lastShotTime > 1.4) {
+            r.lastShotTime = now;
+            damagePlayer(5);
+            toast('💦 A robber splashed you! -5 health', 1200);
+            spawnBlasterFX(r.x, r.z, r.heading, { color: 0x84cc16, y: 1.1 });
+          }
+        }
+      }
+    });
+  }
+
+  function burnFakeCash() {
+    if (!missionCashPile || !state.mission || state.mission.type !== 'FAKE_CASH') return;
+    if (state.mission.progress < state.mission.needed) {
+      toast('🕵️ Bust the robbers guarding it first!', 1800);
+      return;
+    }
+    scene.remove(missionCashPile.mesh);
+    missionCashPile = null;
+    missionRobbers.forEach((r) => scene.remove(r.mesh));
+    missionRobbers = [];
+    completeMission();
   }
 
   // ==============================================================
@@ -2973,6 +3202,35 @@
     }
     state.nearFoodStall = nearFoodStall;
 
+    // nearest carnival ride
+    let nearRide = null, nearRideDist = 7;
+    if (!state.inVehicle && !state.riding) {
+      if (ferrisRidePos) {
+        const d = Math.hypot(ferrisRidePos.x - player.x, ferrisRidePos.z - player.z);
+        if (d < nearRideDist) { nearRide = { kind: 'ferris', price: RIDE_PRICES.ferris }; nearRideDist = d; }
+      }
+      if (carouselRidePos) {
+        const d = Math.hypot(carouselRidePos.x - player.x, carouselRidePos.z - player.z);
+        if (d < nearRideDist) { nearRide = { kind: 'carousel', price: RIDE_PRICES.carousel }; nearRideDist = d; }
+      }
+    }
+    state.nearRide = nearRide;
+
+    // fake-cash pile (mission)
+    let nearCashPile = false;
+    if (!state.inVehicle && missionCashPile) {
+      nearCashPile = Math.hypot(missionCashPile.x - player.x, missionCashPile.z - player.z) < 4;
+    }
+    state.nearCashPile = nearCashPile;
+
+    // TV, only reachable while actually inside the apartment interior
+    let nearTV = false;
+    if (state.apartmentInterior && tvScreenMesh) {
+      const p = tvScreenMesh.userData.pos;
+      nearTV = Math.hypot(p.x - player.x, p.z - player.z) < 3;
+    }
+    state.nearTV = nearTV;
+
     const promptEl = $('prompt-banner');
     if (state.nearVehicle) {
       promptEl.textContent = state.nearVehicle.occupied
@@ -3019,6 +3277,21 @@
       promptEl.textContent = locked ? `${info.emoji} Still cooking — check back soon` : `Tap here to buy a ${info.name.toLowerCase()} ($${info.price}) ${info.emoji}`;
       promptEl.classList.remove('hidden');
       promptEl.onclick = () => buyFood(stall);
+    } else if (state.nearRide) {
+      const ride = state.nearRide;
+      const label = ride.kind === 'ferris' ? '🎡 Ferris Wheel' : '🎠 Carousel';
+      promptEl.textContent = `Tap here to buy a ticket ($${ride.price}) and ride the ${label}`;
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = () => startRide(ride.kind);
+    } else if (state.nearCashPile) {
+      const ready = state.mission && state.mission.progress >= state.mission.needed;
+      promptEl.textContent = ready ? '🔥 Tap here to burn the fake cash!' : '🕵️ Bust the robbers guarding this first';
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = () => burnFakeCash();
+    } else if (state.nearTV) {
+      promptEl.textContent = state.tvOn ? '📺 Tap here to turn off the TV' : '📺 Tap here to turn on the TV';
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = () => toggleTV();
     } else {
       promptEl.classList.add('hidden');
       promptEl.onclick = null;
@@ -3052,16 +3325,71 @@
     toast('🏠 You bought the apartment! Come back anytime to rest.', 3000);
   }
 
+  // Walking up to an owned apartment now actually sends you inside — a
+  // small first-person room with a couch and a TV — instead of an instant
+  // heal-and-done. The heal-to-full still happens on arrival (same 30s
+  // cooldown as before), it's just wrapped in an actual visit now.
   function restAtApartment(apt) {
     if (!apt.owned) { toast(`🏠 You need to buy this apartment first ($${apt.price}).`); return; }
+    enterApartment(apt);
+  }
+
+  const TV_SHOW_NAME = 'Sigma Face';
+
+  function enterApartment(apt) {
+    savedOutdoorPos = { x: player.x, z: player.z, y: player.y, heading: player.heading };
+    savedCameraYaw = cameraYaw;
+    savedCameraPitch = cameraPitch;
+    playerMesh.visible = false;
+
+    const cx = APARTMENT_INTERIOR.x, cz = APARTMENT_INTERIOR.z;
+    player.x = cx; player.z = cz + APT_ROOM_D / 2 - 2; player.y = 0; player.vy = 0; player.grounded = true;
+    player.heading = Math.PI; // facing -Z, into the room
+    cameraYaw = 0; cameraPitch = 0.05; // aimYaw = cameraYaw + PI = PI, matching player.heading above
+
+    state.apartmentInterior = { apt };
+    state.tvOn = false;
+    updateTVScreen();
+
     const now = performance.now() / 1000;
-    if (now < (apt.restCooldownUntil || 0)) {
-      toast("🏠 You're not tired yet. Try again in a bit.");
-      return;
+    if (now >= (apt.restCooldownUntil || 0)) {
+      apt.restCooldownUntil = now + 30;
+      healPlayer(100);
+      toast('🏠 Welcome home — health fully restored!', 2200);
+    } else {
+      toast('🏠 Welcome home!', 1800);
     }
-    apt.restCooldownUntil = now + 30;
-    healPlayer(100);
-    toast('🏠 You rested up — health fully restored!', 2000);
+  }
+
+  function exitApartmentInterior() {
+    if (!state.apartmentInterior) return;
+    state.apartmentInterior = null;
+    state.tvOn = false;
+    updateTVScreen();
+    player.x = savedOutdoorPos.x; player.z = savedOutdoorPos.z; player.y = savedOutdoorPos.y;
+    player.heading = savedOutdoorPos.heading; player.vy = 0; player.grounded = true;
+    cameraYaw = savedCameraYaw; cameraPitch = savedCameraPitch;
+    playerMesh.visible = true;
+  }
+
+  function toggleTV() {
+    state.tvOn = !state.tvOn;
+    updateTVScreen();
+    toast(state.tvOn ? `📺 Now playing: ${TV_SHOW_NAME}!` : '📺 TV turned off.', 1800);
+  }
+
+  function updateTVScreen() {
+    if (!tvScreenMesh) return;
+    if (!state.tvOn) tvScreenMesh.material.color.set(0x0f172a);
+  }
+
+  function updateApartmentInterior(dt) {
+    if (!state.apartmentInterior) return;
+    if (state.tvOn && tvScreenMesh) {
+      const hue = (performance.now() / 800) % 1;
+      tvScreenMesh.material.color.setHSL(hue, 0.6, 0.55);
+    }
+    if (player.z > apartmentInteriorEntranceZ) exitApartmentInterior();
   }
 
   function grabPizza(place) {
@@ -3132,6 +3460,70 @@
     addFloatingSign(cx, h + 0.8, cz - d / 2 + 1.5, '🏦 VAULT');
     addFloatingSign(cx, h + 0.8, cz + d / 2 - 1.5, '🚪 EXIT');
     bankInteriorEntranceZ = cz + d / 2 - 1.3; // crossing this line while inside means you've left
+  }
+
+  function buildApartmentInterior() {
+    const cx = APARTMENT_INTERIOR.x, cz = APARTMENT_INTERIOR.z;
+    const w = APT_ROOM_W, d = APT_ROOM_D, h = APT_ROOM_H;
+    const wallThick = 0.5;
+    const doorGap = 3.5;
+
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.2, d), new THREE.MeshStandardMaterial({ color: 0xb08968 }));
+    floor.position.set(cx, 0.1, cz);
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xe7d9c5 });
+
+    const northWall = new THREE.Mesh(new THREE.BoxGeometry(w, h, wallThick), wallMat);
+    northWall.position.set(cx, h / 2, cz - d / 2);
+    scene.add(northWall);
+    buildingBoxes.push(boxOf(cx, cz - d / 2, w, wallThick, h));
+
+    [-1, 1].forEach((side) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(wallThick, h, d), wallMat);
+      wall.position.set(cx + side * w / 2, h / 2, cz);
+      scene.add(wall);
+      buildingBoxes.push(boxOf(cx + side * w / 2, cz, wallThick, d, h));
+    });
+
+    const southSegW = (w - doorGap) / 2;
+    [-1, 1].forEach((side) => {
+      const segX = cx + side * (doorGap / 2 + southSegW / 2);
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(southSegW, h, wallThick), wallMat);
+      seg.position.set(segX, h / 2, cz + d / 2);
+      scene.add(seg);
+      buildingBoxes.push(boxOf(segX, cz + d / 2, southSegW, wallThick, h));
+    });
+
+    // Couch, against the east wall
+    const couchGroup = new THREE.Group();
+    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x0891b2, roughness: 0.8 });
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.6, 1.2), cushionMat);
+    base.position.y = 0.3;
+    const back = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.9, 0.3), cushionMat);
+    back.position.set(0, 0.75, -0.45);
+    couchGroup.add(base, back);
+    couchGroup.position.set(cx + w / 2 - 1.4, 0, cz - 1);
+    couchGroup.rotation.y = Math.PI / 2;
+    couchGroup.traverse((c) => { c.castShadow = true; });
+    scene.add(couchGroup);
+
+    // TV, against the north wall facing the couch, on a low stand
+    const standMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.7 });
+    const stand = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 0.4), standMat);
+    stand.position.set(cx, 0.25, cz - d / 2 + 0.5);
+    scene.add(stand);
+    const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.1), new THREE.MeshStandardMaterial({ color: 0x111827 }));
+    tvFrame.position.set(cx, 1.05, cz - d / 2 + 0.45);
+    scene.add(tvFrame);
+    tvScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.72), new THREE.MeshBasicMaterial({ color: 0x0f172a }));
+    tvScreenMesh.position.set(cx, 1.05, cz - d / 2 + 0.51);
+    scene.add(tvScreenMesh);
+    tvScreenMesh.userData.pos = { x: cx, z: cz - d / 2 + 0.5 };
+
+    addFloatingSign(cx, h + 0.6, cz + d / 2 - 1.2, '🚪 EXIT');
+    apartmentInteriorEntranceZ = cz + d / 2 - 1;
   }
 
   function makeGuardMesh() {
@@ -3381,38 +3773,61 @@
       }
     }
 
-    // Jump / gravity — a tap starts the first jump, a second tap while
-    // airborne is a much higher double jump, high enough to reach onto
-    // shorter rooftops (see getFloorHeightAt / collidesWithBuildingsAtHeight).
+    // Swimming: out past the shoreline (and not standing on something like
+    // the submarine's deck — hence the y<1 guard), jump/gravity are
+    // replaced with paddle physics: each jump press is a stroke upward,
+    // otherwise you slowly sink, until you either paddle back to the
+    // surface or climb out onto the sand.
     const wasGrounded = player.grounded;
-    if (player.jumpRequest) {
-      player.jumpRequest = false;
-      if (player.jumpsUsed < 2) {
-        player.vy = player.jumpsUsed === 0 ? JUMP1_VELOCITY : JUMP2_VELOCITY;
-        player.jumpsUsed += 1;
+    const swimming = isInOcean(player.x, player.z) && player.y < 1;
+    player.swimming = swimming;
+    if (swimming) {
+      if (player.jumpRequest) {
+        player.jumpRequest = false;
+        player.vy = SWIM_STROKE_VELOCITY;
+      } else {
+        player.vy = Math.max(player.vy - SWIM_SINK_ACCEL * dt, -SWIM_MAX_SINK_SPEED);
+      }
+      player.y = Math.max(SWIM_MAX_DEPTH, Math.min(SWIM_SURFACE_Y, player.y + player.vy * dt));
+      player.grounded = false;
+      player.jumpsUsed = 0;
+      // Keeps fallFromY pinned to "wherever we just were in the water" the
+      // whole time we're swimming, so climbing out onto the sand never
+      // reads as a multi-unit fall and triggers bogus fall damage.
+      player.fallFromY = player.y;
+    } else {
+      // Jump / gravity — a tap starts the first jump, a second tap while
+      // airborne is a much higher double jump, high enough to reach onto
+      // shorter rooftops (see getFloorHeightAt / collidesWithBuildingsAtHeight).
+      if (player.jumpRequest) {
+        player.jumpRequest = false;
+        if (player.jumpsUsed < 2) {
+          player.vy = player.jumpsUsed === 0 ? JUMP1_VELOCITY : JUMP2_VELOCITY;
+          player.jumpsUsed += 1;
+          player.grounded = false;
+        }
+      }
+      player.vy -= GRAVITY * dt;
+      player.y += player.vy * dt;
+      const floorY = Math.max(getFloorHeightAt(player.x, player.z), getMountainHeightAt(player.x, player.z));
+      if (player.y <= floorY) {
+        player.y = floorY;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumpsUsed = 0;
+      } else {
         player.grounded = false;
       }
-    }
-    player.vy -= GRAVITY * dt;
-    player.y += player.vy * dt;
-    const floorY = Math.max(getFloorHeightAt(player.x, player.z), getMountainHeightAt(player.x, player.z));
-    if (player.y <= floorY) {
-      player.y = floorY;
-      player.vy = 0;
-      player.grounded = true;
-      player.jumpsUsed = 0;
-    } else {
-      player.grounded = false;
-    }
 
-    // Fall damage: only for a real drop (e.g. walking off a rooftop edge),
-    // not for jumping and landing back at the same height — fallFromY is
-    // set the moment you leave solid ground, so a jump's up-then-down to
-    // the same spot nets to ~0 fall distance and never costs health.
-    if (wasGrounded && !player.grounded) {
-      player.fallFromY = player.y;
-    } else if (!wasGrounded && player.grounded) {
-      if ((player.fallFromY || 0) - player.y > 3) damagePlayer(5);
+      // Fall damage: only for a real drop (e.g. walking off a rooftop edge),
+      // not for jumping and landing back at the same height — fallFromY is
+      // set the moment you leave solid ground, so a jump's up-then-down to
+      // the same spot nets to ~0 fall distance and never costs health.
+      if (wasGrounded && !player.grounded) {
+        player.fallFromY = player.y;
+      } else if (!wasGrounded && player.grounded) {
+        if ((player.fallFromY || 0) - player.y > 3) damagePlayer(5);
+      }
     }
 
     const clampR = worldClampR();
@@ -3565,6 +3980,13 @@
 
   function updateVehicle(dt) {
     const v = state.inVehicle;
+    if (v.sinking) {
+      // Fully handed off to updateSinkingVehicles once it's going under —
+      // no more driving, just riding it down (or bailing and swimming up).
+      player.x = v.x; player.z = v.z; player.heading = v.heading;
+      player.y = v.altitude || 0;
+      return;
+    }
     const kb = keyboardMove();
     let throttle = -(input.moveY) - kb.my; // forward is negative Y
     // Negated for the same reason as the walking fix: increasing heading
@@ -3631,6 +4053,16 @@
     const clampR = worldClampR();
     v.x = Math.max(-clampR, Math.min(clampR, v.x));
     v.z = Math.max(-clampR, Math.min(clampR, v.z));
+
+    // Only jet skis belong out on the water — anything else that drives (or
+    // lands) in the ocean starts taking on water instead of just floating
+    // there, same idea as the abandoned-car-crashes and jet-bails-mid-air
+    // mechanics elsewhere.
+    if (v.type !== 'jetski' && !flying && isInOcean(v.x, v.z)) {
+      v.sinking = true;
+      v.speed = 0;
+      toast('🌊 Uh oh — the car is sinking! Get out and press jump to swim up!', 2600);
+    }
 
     v.mesh.position.set(v.x, v.altitude || 0, v.z);
     v.mesh.rotation.y = v.heading;
@@ -3795,10 +4227,11 @@
     cameraYaw -= lookDeltaX * 0.006;
     cameraPitch -= lookDeltaY * 0.004;
 
-    // Inside the bank the camera sits right at the player's eyes and looks
-    // wherever they're dragging — true first person, no third-person orbit
-    // or auto-follow-behind logic below applies.
-    if (state.bankHeist) {
+    // Inside the bank (or an apartment) the camera sits right at the
+    // player's eyes and looks wherever they're dragging — true first
+    // person, no third-person orbit or auto-follow-behind logic below
+    // applies.
+    if (state.bankHeist || state.apartmentInterior) {
       cameraPitch = Math.max(-0.9, Math.min(0.9, cameraPitch));
       lookDeltaX = 0; lookDeltaY = 0;
       const eyeY = player.y + 1.5;
@@ -3931,6 +4364,43 @@
     }
   }
 
+  // A car (or tank/jeep/jet) that's driven into the ocean sinks in place —
+  // steadily settling underwater rather than just floating there. Staying
+  // inside chips away at health until it fully sinks and respawns on dry
+  // land; bailing out and swimming to the surface (see the swim physics in
+  // updatePlayerWalking) is always the safer move.
+  const SINK_SPEED = 1.4;
+  const SINK_DEPTH = -7;
+  function updateSinkingVehicles(dt) {
+    for (const v of vehicles) {
+      if (!v.sinking) continue;
+      v.altitude = (v.altitude || 0) - SINK_SPEED * dt;
+      v.mesh.position.set(v.x, v.altitude, v.z);
+      if (state.inVehicle === v) {
+        player.x = v.x; player.z = v.z; player.y = v.altitude;
+        const now = performance.now() / 1000;
+        if (now - (v.lastSinkDamageAt || 0) > 1) {
+          v.lastSinkDamageAt = now;
+          damagePlayer(1);
+        }
+      }
+      if (v.altitude <= SINK_DEPTH) {
+        v.sinking = false;
+        if (state.inVehicle === v) tryEnterExitVehicle(); // force out before it respawns elsewhere
+        const spot = (v.type === 'tank' || v.type === 'jet' || v.type === 'jeep')
+          ? randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 20, 3)
+          : randomRoadSpot();
+        v.x = spot.x; v.z = spot.z;
+        if (spot.heading !== undefined) v.heading = spot.heading;
+        v.altitude = 0;
+        v.speed = 0;
+        v.mesh.position.set(v.x, 0, v.z);
+        v.mesh.rotation.y = v.heading;
+        toast('🌊 It sank to the bottom... a fresh one turned up nearby.', 2200);
+      }
+    }
+  }
+
   function spawnExplosionFx(x, z) {
     const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 10), new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.9 }));
     flash.position.set(x, 1, z);
@@ -4004,14 +4474,18 @@
     requestAnimationFrame(loop);
     const dt = Math.min(clock.getDelta(), 0.05);
 
-    if (state.inVehicle) updateVehicle(dt);
+    if (state.riding) updateRide(dt);
+    else if (state.inVehicle) updateVehicle(dt);
     else updatePlayerWalking(dt);
     if (state.bankHeist) updateBankHeist(dt);
+    if (state.apartmentInterior) updateApartmentInterior(dt);
 
     updateOtherVehicles(dt);
     updatePoliceVehicles(dt);
+    updateMissionRobbers(dt);
     updateWantedDecay(dt);
     updateCrashingVehicles(dt);
+    updateSinkingVehicles(dt);
     updateRobots(dt);
     updatePedestrians(dt);
     updateCoins();
@@ -4049,13 +4523,18 @@
     get militaryGateBox() { return militaryGateBox; },
     get buildingBoxes() { return buildingBoxes; },
     get BANK_INTERIOR() { return BANK_INTERIOR; },
+    isInOcean, get oceanStartZ() { return oceanStartZ; }, get oceanFarZ() { return oceanFarZ; },
+    startRide, endRide,
     get mountainPeaks() { return mountainPeaks; },
     get mountainZ() { return mountainZ; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
     fireWeapon, tryEnterExitVehicle, startMission, openShop, startBankHeist, exitBankHeist, grabPizza, getMilitaryJob, blockedByMilitaryGate,
     getFloorHeightAt, getMountainHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment,
-    restAtApartment, buyFood, cycleWeapon, toggleSprint, addWanted,
+    restAtApartment, buyFood, cycleWeapon, toggleSprint, addWanted, burnFakeCash,
+    get missionRobbers() { return missionRobbers; }, get missionCashPile() { return missionCashPile; },
+    enterApartment, exitApartmentInterior, toggleTV,
+    get APARTMENT_INTERIOR() { return APARTMENT_INTERIOR; },
     CONTACTS, WEAPONS, VEHICLE_WEAPONS,
   };
 
