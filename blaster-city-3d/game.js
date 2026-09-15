@@ -1212,9 +1212,10 @@
       const mesh = makeJetSkiMesh();
       const z = sandFar + 4;
       mesh.position.set(x, 0, z);
-      mesh.rotation.y = Math.PI;
+      // heading 0 = +Z = further out into open water, so driving forward
+      // right after boarding heads out to sea instead of back onto the sand.
       scene.add(mesh);
-      vehicles.push({ mesh, x, z, heading: Math.PI, speed: 0, occupied: false, type: 'jetski' });
+      vehicles.push({ mesh, x, z, heading: 0, speed: 0, occupied: false, type: 'jetski' });
     });
 
     // Submarine, sticking halfway out of the water further offshore
