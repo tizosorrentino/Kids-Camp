@@ -2838,12 +2838,22 @@
       // exit
       const v = state.inVehicle;
       const wasMoving = Math.abs(v.speed) > 2;
+      const wasFlying = v.type === 'jet' && (v.altitude || 0) > 3;
       player.x = v.x + Math.sin(v.heading + Math.PI / 2) * 2.4;
       player.z = v.z + Math.cos(v.heading + Math.PI / 2) * 2.4;
       player.heading = v.heading;
       playerMesh.visible = true;
       state.inVehicle = null;
-      if (wasMoving) {
+      if (wasFlying) {
+        // Bail out of a jet while it's still airborne and it doesn't just
+        // hang there — it noses over and plummets on its own (see
+        // updateCrashingVehicles) until it hits the ground and explodes,
+        // then a fresh one respawns at the base.
+        v.crashing = true;
+        v.crashVy = 0;
+        v.speed = 0;
+        toast('✈️💨 You bailed out mid-air — the jet is going down!', 2200);
+      } else if (wasMoving) {
         // Bailing out while it's still rolling costs health, and the car
         // doesn't just stop dead — it keeps going on its own (picked up by
         // the normal NPC traffic AI) until it hits a building.
@@ -2873,6 +2883,7 @@
     // nearest vehicle
     let nearest = null, nearestDist = 3.4;
     for (const v of vehicles) {
+      if (v.crashing) continue; // can't hop into a jet that's plummeting
       const d = Math.hypot(v.x - player.x, v.z - player.z);
       if (d < nearestDist) { nearest = v; nearestDist = d; }
     }
@@ -2934,11 +2945,7 @@
     state.nearFoodStall = nearFoodStall;
 
     const promptEl = $('prompt-banner');
-    if (state.inVehicle) {
-      promptEl.textContent = 'Press 🚪 or E to exit the car';
-      promptEl.classList.remove('hidden');
-      promptEl.onclick = null;
-    } else if (state.nearVehicle) {
+    if (state.nearVehicle) {
       promptEl.textContent = state.nearVehicle.occupied
         ? 'Press 🚪 or E to take this car (driver will run off)'
         : 'Press 🚪 or E to enter the car';
@@ -3597,6 +3604,34 @@
     v.mesh.rotation.y = v.heading;
   }
 
+  // A jet left riderless mid-flight (see tryEnterExitVehicle) doesn't just
+  // hang in the air — it noses over, spins as it falls, and explodes on
+  // impact just like a totalled car, then respawns fresh at the base.
+  function updateCrashingVehicles(dt) {
+    for (const v of vehicles) {
+      if (!v.crashing) continue;
+      v.crashVy = (v.crashVy || 0) - GRAVITY * dt;
+      v.altitude = Math.max(0, (v.altitude || 0) + v.crashVy * dt);
+      v.mesh.position.set(v.x, v.altitude, v.z);
+      v.mesh.rotation.x = 0.5;
+      v.mesh.rotation.z += dt * 5;
+      if (v.altitude <= 0) {
+        v.crashing = false;
+        v.crashVy = 0;
+        v.mesh.rotation.x = 0;
+        v.mesh.rotation.z = 0;
+        spawnExplosionFx(v.x, v.z);
+        toast('💥 The jet crashed and was destroyed!', 2200);
+        const spot = randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 20, 3);
+        v.x = spot.x; v.z = spot.z;
+        if (spot.heading !== undefined) v.heading = spot.heading;
+        v.altitude = 0;
+        v.mesh.position.set(v.x, 0, v.z);
+        v.mesh.rotation.y = v.heading;
+      }
+    }
+  }
+
   function spawnExplosionFx(x, z) {
     const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 10), new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.9 }));
     flash.position.set(x, 1, z);
@@ -3676,6 +3711,7 @@
     updateOtherVehicles(dt);
     updatePoliceVehicles(dt);
     updateWantedDecay(dt);
+    updateCrashingVehicles(dt);
     updateRobots(dt);
     updatePedestrians(dt);
     updateCoins();
