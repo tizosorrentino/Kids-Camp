@@ -96,6 +96,8 @@
     nearFoodStall: null,
     aimMarkerOn: false,
     sprinting: false,
+    wantedStars: 0,
+    wantedDecayTimer: 0,
     hasBaseAccess: false,
     lastShotTime: 0,
   };
@@ -1738,6 +1740,24 @@
     return group;
   }
 
+  // Black-and-white paint plus a red/blue light bar — reuses the regular
+  // car body so it reads as "a car" at a glance, distinct enough up close.
+  function makePoliceCarMesh() {
+    const group = makeCarMesh(0x1e293b);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.12, 0.25, 1.6), new THREE.MeshStandardMaterial({ color: 0xf8fafc }));
+    stripe.position.set(0, 0.6, 0.4);
+    group.add(stripe);
+    const barBase = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.16, 0.4), new THREE.MeshStandardMaterial({ color: 0x1c1917 }));
+    barBase.position.set(0, 1.55, -0.2);
+    group.add(barBase);
+    [[-0.32, 0xef4444], [0.32, 0x3b82f6]].forEach(([x, color]) => {
+      const light = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.14, 0.36), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8 }));
+      light.position.set(x, 1.66, -0.2);
+      group.add(light);
+    });
+    return group;
+  }
+
   // A random point ON a road, with a heading aligned to that road's axis
   // and offset toward one "lane" — NPC-driven cars only ever spawn (and
   // stay) on the street, never the grass/sidewalks.
@@ -2181,7 +2201,10 @@
   // Getting splashed is just a startle, not a "hit" — no damage, no reward,
   // no removal. They yelp, dash off for a bit, then go back to wandering.
   function splashPedestrian(ped) {
-    if (!ped.fleeing) toast('💦 Splash! They ran off.', 1400);
+    if (!ped.fleeing) {
+      toast('💦 Splash! They ran off.', 1400);
+      addWanted(1);
+    }
     ped.fleeing = true;
   }
 
@@ -3030,6 +3053,7 @@
     state.money += reward;
     updateHUDMoney();
     writeSave();
+    addWanted(2);
     toast(`🏦 Vault cracked! +$${reward}`, 3000);
   }
 
@@ -3130,10 +3154,129 @@
   function damagePlayer(amount) {
     state.health = Math.max(0, state.health - amount);
     updateHealthUI();
+    checkPlayerDefeat();
   }
 
   function updateHealthUI() {
     $('health-fill').style.width = Math.max(0, state.health) + '%';
+  }
+
+  // Hitting 0 health (police, a fall, a car explosion, anything) never
+  // just sat there with an empty bar before — now it clears your wanted
+  // level, costs a small fine, and drops you back in with half health
+  // instead of leaving you stuck.
+  function checkPlayerDefeat() {
+    if (state.health > 0) return;
+    const wasWanted = state.wantedStars > 0;
+    if (state.inVehicle) tryEnterExitVehicle();
+    standDownPolice();
+    state.wantedStars = 0;
+    state.wantedDecayTimer = 0;
+    updateWantedHUD();
+    const fine = Math.min(state.money, 50);
+    state.money -= fine;
+    updateHUDMoney();
+    const spot = randomOpenSpot(3);
+    player.x = spot.x; player.z = spot.z; player.y = 0; player.vy = 0; player.grounded = true;
+    state.health = 50;
+    updateHealthUI();
+    writeSave();
+    toast(wasWanted ? `🚨 Busted! -$${fine} fine, health restored.` : '💫 Knocked out — back on your feet.', 2600);
+  }
+
+  // ------------------------------------------------------------
+  // Wanted level — non-lethal "crimes" (robbing a bank, blasting a
+  // pedestrian, running one over) build up 1-5 stars; police cars chase
+  // and fire their own non-lethal blasters while you're wanted, and the
+  // level fades on its own if you go a while without doing anything else.
+  // ------------------------------------------------------------
+  function addWanted(amount) {
+    const before = state.wantedStars;
+    state.wantedStars = Math.min(5, state.wantedStars + amount);
+    state.wantedDecayTimer = 0;
+    updateWantedHUD();
+    if (state.wantedStars > before) {
+      spawnPoliceIfNeeded();
+      if (before === 0) toast('🚨 The cops are after you!', 2000);
+    }
+  }
+
+  function updateWantedHUD() {
+    const el = $('wanted-stars');
+    if (state.wantedStars <= 0) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.textContent = '⭐'.repeat(state.wantedStars);
+  }
+
+  function updateWantedDecay(dt) {
+    if (state.wantedStars <= 0) return;
+    state.wantedDecayTimer += dt;
+    if (state.wantedDecayTimer > 10) {
+      state.wantedDecayTimer = 0;
+      state.wantedStars -= 1;
+      updateWantedHUD();
+      if (state.wantedStars <= 0) {
+        standDownPolice();
+        toast('✅ The cops gave up the chase.', 1800);
+      }
+    }
+  }
+
+  function spawnPoliceIfNeeded() {
+    const chasers = vehicles.filter((v) => v.type === 'police' && v.chasing);
+    const desired = Math.min(state.wantedStars, 3);
+    for (let i = chasers.length; i < desired; i++) {
+      const spot = randomOpenSpotNear(player.x, player.z, 45, 3);
+      const mesh = makePoliceCarMesh();
+      mesh.position.set(spot.x, 0, spot.z);
+      scene.add(mesh);
+      vehicles.push({
+        mesh, x: spot.x, z: spot.z, heading: 0, speed: 0,
+        occupied: true, type: 'police', chasing: true, lastShotTime: 0,
+      });
+    }
+  }
+
+  function standDownPolice() {
+    // Despawn them rather than leaving idle cop cars scattered around after
+    // every chase — unless the player actually carjacked one, in which
+    // case it's their car now and stays put.
+    for (let i = vehicles.length - 1; i >= 0; i--) {
+      const v = vehicles[i];
+      if (v.type !== 'police' || v === state.inVehicle) continue;
+      scene.remove(v.mesh);
+      vehicles.splice(i, 1);
+    }
+  }
+
+  // Simple pursuit: drive straight at the player (off the road grid if it
+  // has to, like real cops cutting corners), building-aware so they don't
+  // clip through walls, and fire a non-lethal blaster hit on a cooldown
+  // whenever they're close enough — same raycast/damage system as every
+  // other weapon in the game, just aimed by the police car itself.
+  function updatePoliceVehicles(dt) {
+    vehicles.forEach((v) => {
+      if (v.type !== 'police' || !v.chasing || v === state.inVehicle) return;
+      const dx = player.x - v.x, dz = player.z - v.z;
+      const dist = Math.hypot(dx, dz);
+      v.heading = Math.atan2(dx, dz);
+      const speed = 9.5;
+      const nx = v.x + Math.sin(v.heading) * speed * dt;
+      const nz = v.z + Math.cos(v.heading) * speed * dt;
+      if (!collidesWithBuildings(nx, nz, 1.4)) { v.x = nx; v.z = nz; }
+      v.mesh.position.set(v.x, 0, v.z);
+      v.mesh.rotation.y = v.heading;
+
+      if (dist < 16) {
+        const now = performance.now() / 1000;
+        if (now - v.lastShotTime > 1.4) {
+          v.lastShotTime = now;
+          damagePlayer(4);
+          toast('🚨 A police blaster got you! -4 health', 1200);
+          spawnBlasterFX(v.x, v.z, v.heading, { color: 0x60a5fa, y: 1.1 });
+        }
+      }
+    });
   }
 
   function updateVehicle(dt) {
@@ -3233,7 +3376,10 @@
   }
 
   function bumpPedestrian(ped) {
-    if (!ped.fleeing) toast('🚗 Beep! They jumped out of the way.', 1400);
+    if (!ped.fleeing) {
+      toast('🚗 Beep! They jumped out of the way.', 1400);
+      addWanted(1);
+    }
     ped.fleeing = true;
   }
 
@@ -3244,7 +3390,7 @@
   function updateOtherVehicles(dt) {
     const halfRoad = ROAD_WIDTH / 2;
     vehicles.forEach((v) => {
-      if (v === state.inVehicle || !v.occupied) return;
+      if (v === state.inVehicle || !v.occupied || v.type === 'police') return;
 
       const atIntersection = distToNearestRoadLine(v.x) < halfRoad && distToNearestRoadLine(v.z) < halfRoad;
       if (atIntersection) {
@@ -3528,6 +3674,8 @@
     else updatePlayerWalking(dt);
 
     updateOtherVehicles(dt);
+    updatePoliceVehicles(dt);
+    updateWantedDecay(dt);
     updateRobots(dt);
     updatePedestrians(dt);
     updateCoins();
@@ -3570,7 +3718,7 @@
     set cameraYaw(v) { cameraYaw = v; },
     fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
     getFloorHeightAt, getMountainHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment,
-    restAtApartment, buyFood, cycleWeapon, toggleSprint,
+    restAtApartment, buyFood, cycleWeapon, toggleSprint, addWanted,
     CONTACTS, WEAPONS, VEHICLE_WEAPONS,
   };
 
