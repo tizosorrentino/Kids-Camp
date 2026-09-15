@@ -100,6 +100,7 @@
     wantedDecayTimer: 0,
     hasBaseAccess: false,
     lastShotTime: 0,
+    bankHeist: null, // {bank, guards, tools, hasScrewdriver, hasHammer, cracking, crackProgress, vaultCracked, stolenAmount, escapeTimer, policeArrived}
   };
 
   let pendingApartmentsOwned = null;
@@ -656,6 +657,17 @@
   let crashShakeMag = 0;
   let lastCrashToastAt = 0;
 
+  // ------------------------------------------------------------
+  // Bank heist interior — a single shared vault room tucked into an empty
+  // pocket of the world, far from the city/military base/mountains/beach,
+  // reused by whichever bank the player breaks into.
+  // ------------------------------------------------------------
+  const BANK_INTERIOR = { x: -400, z: 420 };
+  const BANK_ROOM_W = 24, BANK_ROOM_D = 20, BANK_ROOM_H = 6;
+  let bankInteriorEntranceZ = 0;
+  let savedOutdoorPos = null;
+  let savedCameraYaw = Math.PI, savedCameraPitch = 0.28;
+
   function startGameWorld() {
     if (gameStarted) return;
     gameStarted = true;
@@ -664,6 +676,7 @@
     buildMilitaryBase();
     buildMountains();
     buildBeachCarnival();
+    buildBankInterior();
     if (pendingApartmentsOwned) {
       apartments.forEach((a, i) => { if (pendingApartmentsOwned[i]) a.owned = true; });
     }
@@ -2124,16 +2137,29 @@
   // at the ground, without the ray's height collapsing over distance.
   // Shared by the player's handheld weapons and vehicle-mounted ones.
   function raycastHit(originX, originY, originZ, range) {
+    // Inside the bank the camera IS the player's eyes (true first person),
+    // so the aim ray is just the camera's own forward vector — no need for
+    // the outdoor third-person approximation below.
     const aimYaw = cameraYaw + Math.PI; // world-space "into the screen" direction, same convention as player.heading
-    const aimDir = new THREE.Vector3(
-      Math.sin(aimYaw),
-      (0.28 - cameraPitch) * 1.1,
-      Math.cos(aimYaw)
-    ).normalize();
+    let aimDir;
+    if (state.bankHeist) {
+      aimDir = new THREE.Vector3(
+        Math.sin(aimYaw) * Math.cos(cameraPitch),
+        -Math.sin(cameraPitch),
+        Math.cos(aimYaw) * Math.cos(cameraPitch)
+      ).normalize();
+    } else {
+      aimDir = new THREE.Vector3(
+        Math.sin(aimYaw),
+        (0.28 - cameraPitch) * 1.1,
+        Math.cos(aimYaw)
+      ).normalize();
+    }
     fireRaycaster.set(new THREE.Vector3(originX, originY, originZ), aimDir);
     const targetMeshes = [];
     robots.forEach((bot) => { if (bot.alive) targetMeshes.push(bot.mesh); });
     pedestrians.forEach((ped) => targetMeshes.push(ped.mesh));
+    if (state.bankHeist) state.bankHeist.guards.forEach((g) => { if (g.alive) targetMeshes.push(g.mesh); });
     const hits = fireRaycaster.intersectObjects(targetMeshes, true);
     if (hits.length && hits[0].distance <= range) return findEntityFromHit(hits[0].object);
     return null;
@@ -2143,6 +2169,7 @@
     if (!entity) return false;
     if (robots.includes(entity)) { applyDamageToRobot(entity, damage); return true; }
     if (pedestrians.includes(entity)) { splashPedestrian(entity); return true; }
+    if (state.bankHeist && state.bankHeist.guards.includes(entity)) { splashGuard(entity, damage); return true; }
     return false;
   }
 
@@ -2170,9 +2197,10 @@
     state.lastShotTime = now;
 
     const originX = player.x, originZ = player.z;
-    const entity = raycastHit(originX, cameraFollowY + 1.3, originZ, w.range);
+    const originY = state.bankHeist ? player.y + 1.5 : cameraFollowY + 1.3;
+    const entity = raycastHit(originX, originY, originZ, w.range);
     applyHitToEntity(entity, w.damage);
-    spawnBlasterFX(originX, originZ, player.heading);
+    spawnBlasterFX(originX, originZ, player.heading, state.bankHeist ? { y: player.y + 1.1 } : undefined);
   }
 
   // Non-violent turret weapons for the two combat vehicles at the military
@@ -2957,9 +2985,9 @@
       promptEl.onclick = openShop;
     } else if (state.nearBank) {
       const locked = performance.now() / 1000 < state.nearBank.cooldownUntil;
-      promptEl.textContent = locked ? '🏦 Vault is locked — check back soon' : 'Tap here to crack the bank vault 🏦';
+      promptEl.textContent = locked ? '🏦 Vault is locked — check back soon' : 'Tap here to break into the bank 🏦';
       promptEl.classList.remove('hidden');
-      promptEl.onclick = () => robBank(state.nearBank);
+      promptEl.onclick = () => startBankHeist(state.nearBank);
     } else if (state.nearPizza) {
       const locked = performance.now() / 1000 < state.nearPizza.cooldownUntil;
       promptEl.textContent = locked ? '🍕 The oven is still going — check back soon' : 'Tap here to grab a cheese pizza 🍕';
@@ -3049,19 +3077,267 @@
     toast(`🍕 Grabbed a cheese pizza! +$${reward}`, 2400);
   }
 
-  function robBank(bank) {
+  // ------------------------------------------------------------
+  // Bank heist — walking up to a bank now sends the player inside a
+  // first-person vault room instead of robbing it instantly: dodge/splash
+  // the guards, track down a screwdriver and hammer scattered randomly
+  // around the room, then the vault cracks itself open over about a
+  // minute. From there it's a race — walk back out before the police
+  // arrive (4 minutes) to keep the money, or lose it if they catch you
+  // still inside.
+  // ------------------------------------------------------------
+  function buildBankInterior() {
+    const cx = BANK_INTERIOR.x, cz = BANK_INTERIOR.z;
+    const w = BANK_ROOM_W, d = BANK_ROOM_D, h = BANK_ROOM_H;
+    const wallThick = 0.6;
+    const doorGap = 5; // open doorway in the middle of the entrance wall
+
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.2, d), new THREE.MeshStandardMaterial({ color: 0xcbd5e1 }));
+    floor.position.set(cx, 0.1, cz);
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x92400e });
+
+    const northWall = new THREE.Mesh(new THREE.BoxGeometry(w, h, wallThick), wallMat);
+    northWall.position.set(cx, h / 2, cz - d / 2);
+    scene.add(northWall);
+    buildingBoxes.push(boxOf(cx, cz - d / 2, w, wallThick, h));
+
+    [-1, 1].forEach((side) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(wallThick, h, d), wallMat);
+      wall.position.set(cx + side * w / 2, h / 2, cz);
+      scene.add(wall);
+      buildingBoxes.push(boxOf(cx + side * w / 2, cz, wallThick, d, h));
+    });
+
+    // Entrance wall, split with a gap in the middle for the doorway.
+    const southSegW = (w - doorGap) / 2;
+    [-1, 1].forEach((side) => {
+      const segX = cx + side * (doorGap / 2 + southSegW / 2);
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(southSegW, h, wallThick), wallMat);
+      seg.position.set(segX, h / 2, cz + d / 2);
+      scene.add(seg);
+      buildingBoxes.push(boxOf(segX, cz + d / 2, southSegW, wallThick, h));
+    });
+
+    const vaultFrame = new THREE.Mesh(new THREE.BoxGeometry(4.5, 4.5, 0.5), new THREE.MeshStandardMaterial({ color: 0x475569 }));
+    vaultFrame.position.set(cx, 2.4, cz - d / 2 + 0.7);
+    scene.add(vaultFrame);
+    const vaultWheel = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.18, 8, 16), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.6, roughness: 0.3 }));
+    vaultWheel.position.set(cx, 2.4, cz - d / 2 + 1.0);
+    scene.add(vaultWheel);
+
+    addFloatingSign(cx, h + 0.8, cz - d / 2 + 1.5, '🏦 VAULT');
+    addFloatingSign(cx, h + 0.8, cz + d / 2 - 1.5, '🚪 EXIT');
+    bankInteriorEntranceZ = cz + d / 2 - 1.3; // crossing this line while inside means you've left
+  }
+
+  function makeGuardMesh() {
+    const cfg = {
+      skin: SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
+      shirt: 0x1e3a8a, pants: 0x0f172a, hat: 'cap', accessory: 'none',
+      hairStyle: 'short', hairColor: HAIR_COLORS[0], top: 'jacket', bottom: 'pants',
+    };
+    const mesh = buildCharacterMesh(cfg);
+    mesh.traverse((c) => { c.castShadow = true; });
+    return mesh;
+  }
+
+  function makeToolMesh(kind) {
+    const group = new THREE.Group();
+    if (kind === 'screwdriver') {
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.35, 8), new THREE.MeshStandardMaterial({ color: 0xf97316 }));
+      handle.position.y = 0.175;
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8), new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.6 }));
+      shaft.position.y = 0.55;
+      group.add(handle, shaft);
+    } else {
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8), new THREE.MeshStandardMaterial({ color: 0x78350f }));
+      handle.position.y = 0.25;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.16, 0.16), new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.5 }));
+      head.position.y = 0.5;
+      group.add(handle, head);
+    }
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function startBankHeist(bank) {
     const now = performance.now() / 1000;
     if (now < bank.cooldownUntil) {
       toast('🏦 The vault is still locked. Try again later!');
       return;
     }
-    const reward = 400 + Math.floor(Math.random() * 300);
-    bank.cooldownUntil = now + 60;
-    state.money += reward;
-    updateHUDMoney();
-    writeSave();
-    addWanted(2);
-    toast(`🏦 Vault cracked! +$${reward}`, 3000);
+    bank.cooldownUntil = now + 90;
+
+    savedOutdoorPos = { x: player.x, z: player.z, y: player.y, heading: player.heading };
+    savedCameraYaw = cameraYaw;
+    savedCameraPitch = cameraPitch;
+    playerMesh.visible = false; // true first-person — no floating head in view
+
+    const cx = BANK_INTERIOR.x, cz = BANK_INTERIOR.z;
+    player.x = cx; player.z = cz + BANK_ROOM_D / 2 - 3; player.y = 0; player.vy = 0; player.grounded = true;
+    player.heading = Math.PI; // facing -Z, toward the vault
+    cameraYaw = 0; cameraPitch = 0.05; // aimYaw = cameraYaw + PI = PI, matching player.heading above
+
+    const guards = [];
+    [-6, 6].forEach((offsetX) => {
+      const gx = cx + offsetX, gz = cz - BANK_ROOM_D / 2 + 4;
+      const mesh = makeGuardMesh();
+      mesh.position.set(gx, 0, gz);
+      scene.add(mesh);
+      const guard = { mesh, x: gx, z: gz, heading: 0, hp: 30, alive: true, lastShotTime: 0 };
+      mesh.userData.entityRef = guard;
+      guards.push(guard);
+    });
+
+    const tools = ['screwdriver', 'hammer'].map((kind) => {
+      const spot = randomOpenSpotNear(cx, cz, BANK_ROOM_W / 2 - 3, 1);
+      const mesh = makeToolMesh(kind);
+      mesh.position.set(spot.x, 0, spot.z);
+      scene.add(mesh);
+      return { kind, mesh, x: spot.x, z: spot.z, collected: false };
+    });
+
+    state.bankHeist = {
+      bank, guards, tools,
+      hasScrewdriver: false, hasHammer: false,
+      cracking: false, crackProgress: 0,
+      vaultCracked: false, stolenAmount: 0,
+      escapeTimer: 0, policeArrived: false,
+    };
+
+    showOverlay($('bank-heist-hud'));
+    updateBankHeistHUD();
+    toast('🏦 You snuck inside! Find the screwdriver 🪛 and hammer 🔨 — watch out for guards!', 3400);
+  }
+
+  function updateBankHeist(dt) {
+    const h = state.bankHeist;
+    if (!h) return;
+
+    h.guards.forEach((g) => {
+      if (!g.alive) return;
+      const dx = player.x - g.x, dz = player.z - g.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 14) {
+        g.heading = Math.atan2(dx, dz);
+        const speed = 3.2;
+        const nx = g.x + Math.sin(g.heading) * speed * dt;
+        const nz = g.z + Math.cos(g.heading) * speed * dt;
+        if (!collidesWithBuildings(nx, nz, 0.6)) { g.x = nx; g.z = nz; }
+        g.mesh.position.set(g.x, 0, g.z);
+        g.mesh.rotation.y = g.heading;
+        if (dist < 2.8) {
+          const now = performance.now() / 1000;
+          if (now - g.lastShotTime > 1.5) {
+            g.lastShotTime = now;
+            damagePlayer(5);
+            toast('🚨 A guard spotted you! -5 health', 1200);
+            spawnBlasterFX(g.x, g.z, g.heading, { color: 0xf87171, y: 1.1 });
+          }
+        }
+      }
+    });
+
+    h.tools.forEach((t) => {
+      if (t.collected) return;
+      if (Math.hypot(t.x - player.x, t.z - player.z) < 1.4) {
+        t.collected = true;
+        scene.remove(t.mesh);
+        if (t.kind === 'screwdriver') h.hasScrewdriver = true; else h.hasHammer = true;
+        toast(`${t.kind === 'screwdriver' ? '🪛' : '🔨'} Picked up the ${t.kind}!`, 1600);
+        if (h.hasScrewdriver && h.hasHammer && !h.cracking && !h.vaultCracked) {
+          h.cracking = true;
+          toast('🔧 Cracking the vault... hold on!', 2000);
+        }
+      }
+    });
+
+    if (h.cracking && !h.vaultCracked) {
+      h.crackProgress = Math.min(1, h.crackProgress + dt / 60); // ~1 minute to crack
+      if (h.crackProgress >= 1) {
+        h.cracking = false;
+        h.vaultCracked = true;
+        h.stolenAmount = 400 + Math.floor(Math.random() * 300);
+        h.escapeTimer = 240; // 4 minutes to escape with the loot
+        addWanted(2);
+        toast(`🏦💥 Vault cracked! $${h.stolenAmount} is yours if you get out before the police arrive!`, 3400);
+      }
+    }
+
+    if (h.vaultCracked && !h.policeArrived) {
+      h.escapeTimer -= dt;
+      if (h.escapeTimer <= 0) {
+        h.escapeTimer = 0;
+        h.policeArrived = true;
+        toast('🚨 The police got here first — they put the money back in the vault!', 2800);
+        exitBankHeist();
+        return;
+      }
+    }
+
+    if (player.z > bankInteriorEntranceZ) {
+      exitBankHeist();
+      return;
+    }
+
+    updateBankHeistHUD();
+  }
+
+  function updateBankHeistHUD() {
+    const h = state.bankHeist;
+    if (!h) return;
+    const statusEl = $('bank-heist-status');
+    const bar = $('bank-heist-progress-fill');
+    if (h.vaultCracked) {
+      const mm = Math.floor(h.escapeTimer / 60), ss = Math.floor(h.escapeTimer % 60);
+      statusEl.textContent = `🚨 Police in ${mm}:${ss.toString().padStart(2, '0')} — get out!`;
+      bar.style.width = `${Math.max(0, (h.escapeTimer / 240) * 100)}%`;
+      bar.style.background = 'linear-gradient(90deg, #f87171, #facc15)';
+    } else if (h.cracking) {
+      statusEl.textContent = `🔧 Cracking the vault... ${Math.floor(h.crackProgress * 100)}%`;
+      bar.style.width = `${h.crackProgress * 100}%`;
+      bar.style.background = 'linear-gradient(90deg, #facc15, #4ade80)';
+    } else {
+      statusEl.textContent = `${h.hasScrewdriver ? '🪛✅' : '🪛❌'}  ${h.hasHammer ? '🔨✅' : '🔨❌'}  Find the tools!`;
+      bar.style.width = '0%';
+      bar.style.background = 'linear-gradient(90deg, #facc15, #4ade80)';
+    }
+  }
+
+  function exitBankHeist() {
+    const h = state.bankHeist;
+    if (!h) return;
+    if (h.vaultCracked && !h.policeArrived) {
+      state.money += h.stolenAmount;
+      updateHUDMoney();
+      writeSave();
+      toast(`🏦💰 You escaped with $${h.stolenAmount}!`, 3000);
+    } else if (!h.vaultCracked) {
+      toast('🏃 You left the bank empty-handed.', 2000);
+    }
+    h.guards.forEach((g) => scene.remove(g.mesh));
+    h.tools.forEach((t) => { if (!t.collected) scene.remove(t.mesh); });
+    state.bankHeist = null;
+
+    player.x = savedOutdoorPos.x; player.z = savedOutdoorPos.z; player.y = savedOutdoorPos.y;
+    player.heading = savedOutdoorPos.heading; player.vy = 0; player.grounded = true;
+    cameraYaw = savedCameraYaw; cameraPitch = savedCameraPitch;
+    playerMesh.visible = true;
+
+    hideOverlay($('bank-heist-hud'));
+  }
+
+  function splashGuard(guard, damage) {
+    guard.hp -= damage;
+    if (guard.hp <= 0 && guard.alive) {
+      guard.alive = false;
+      guard.mesh.rotation.z = Math.PI / 2;
+      guard.mesh.position.y = 0.3;
+      toast('💦 Splash! The guard slipped and is out of the chase.', 1600);
+    }
   }
 
   // ==============================================================
@@ -3517,6 +3793,28 @@
   function updateCamera(dt) {
     cameraYaw -= lookDeltaX * 0.006;
     cameraPitch -= lookDeltaY * 0.004;
+
+    // Inside the bank the camera sits right at the player's eyes and looks
+    // wherever they're dragging — true first person, no third-person orbit
+    // or auto-follow-behind logic below applies.
+    if (state.bankHeist) {
+      cameraPitch = Math.max(-0.9, Math.min(0.9, cameraPitch));
+      lookDeltaX = 0; lookDeltaY = 0;
+      const eyeY = player.y + 1.5;
+      camera.position.set(player.x, eyeY, player.z);
+      // Same "cameraYaw + PI = world-space forward" convention as the
+      // outdoor raycast/walking code (updatePlayerWalking derives
+      // player.heading straight from cameraYaw+PI) — first-person look
+      // has to line up with that or walking-forward and looking-forward
+      // would point in different directions.
+      const aimYaw = cameraYaw + Math.PI;
+      const lookX = player.x + Math.sin(aimYaw) * Math.cos(cameraPitch);
+      const lookZ = player.z + Math.cos(aimYaw) * Math.cos(cameraPitch);
+      const lookY = eyeY - Math.sin(cameraPitch);
+      camera.lookAt(lookX, lookY, lookZ);
+      return;
+    }
+
     cameraPitch = Math.max(0.08, Math.min(0.75, cameraPitch));
     lookDeltaX = 0; lookDeltaY = 0;
 
@@ -3707,6 +4005,7 @@
 
     if (state.inVehicle) updateVehicle(dt);
     else updatePlayerWalking(dt);
+    if (state.bankHeist) updateBankHeist(dt);
 
     updateOtherVehicles(dt);
     updatePoliceVehicles(dt);
@@ -3722,7 +4021,7 @@
     checkMissionArrival();
     drawMinimap();
     updateCompassAndWaypointInfo();
-    if (playerAimMarker) playerAimMarker.visible = state.aimMarkerOn && !state.inVehicle;
+    if (playerAimMarker) playerAimMarker.visible = state.aimMarkerOn && !state.inVehicle && !state.bankHeist;
     const inJet = !!state.inVehicle && state.inVehicle.type === 'jet';
     $('btn-fly-up').classList.toggle('hidden', !inJet);
     $('btn-fly-down').classList.toggle('hidden', !inJet);
@@ -3748,11 +4047,12 @@
     get militaryBaseCenter() { return militaryBaseCenter; },
     get militaryGateBox() { return militaryGateBox; },
     get buildingBoxes() { return buildingBoxes; },
+    get BANK_INTERIOR() { return BANK_INTERIOR; },
     get mountainPeaks() { return mountainPeaks; },
     get mountainZ() { return mountainZ; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
-    fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
+    fireWeapon, tryEnterExitVehicle, startMission, openShop, startBankHeist, exitBankHeist, grabPizza, getMilitaryJob, blockedByMilitaryGate,
     getFloorHeightAt, getMountainHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment,
     restAtApartment, buyFood, cycleWeapon, toggleSprint, addWanted,
     CONTACTS, WEAPONS, VEHICLE_WEAPONS,
