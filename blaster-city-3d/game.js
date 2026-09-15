@@ -621,6 +621,8 @@
   let oceanMesh = null;
   let oceanBaseZ = null;
   let oceanTime = 0;
+  let oceanStartZ = Infinity; // z where sand ends and water begins — keeps jet skis off the sand
+  let beachClampR = 0; // lets the world-bounds clamp reach the far edge of the ocean
   let shopMarkerPos = null;
   let gameStarted = false;
   let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
@@ -685,7 +687,7 @@
     sun.shadow.camera.far = 260;
     scene.add(sun);
 
-    const groundGeo = new THREE.PlaneGeometry(WORLD_HALF * 5, WORLD_HALF * 5);
+    const groundGeo = new THREE.PlaneGeometry(WORLD_HALF * 6, WORLD_HALF * 6);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x4d7c4a });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -969,7 +971,8 @@
   // military base out to the east, or nobody could ever drive there.
   function worldClampR() {
     const cityR = WORLD_HALF + BLOCK_SIZE / 2 - 2;
-    return militaryBaseCenter ? Math.max(cityR, militaryBaseCenter.clampR || militaryBaseCenter.x + 30) : cityR;
+    const militaryR = militaryBaseCenter ? (militaryBaseCenter.clampR || militaryBaseCenter.x + 30) : 0;
+    return Math.max(cityR, militaryR, beachClampR);
   }
 
   // ------------------------------------------------------------
@@ -1164,36 +1167,52 @@
     const cx = 0;
     const sandNear = WORLD_HALF + 10;   // 136 — just past the city's outer sidewalk
     const sandFar = sandNear + 54;      // 190 — shoreline
-    const waterFar = sandFar + 68;      // 258 — well inside the existing 266 world clamp
-    const dockNear = sandFar - 2;
-    const dockFar = sandFar + 40;       // 228
+    const waterFar = sandFar + 130;     // 320 — a lot more open water to explore/drive around in
     beachCenter = { x: cx, z: (sandNear + sandFar) / 2 };
-    carnivalCenter = { x: cx, z: (dockNear + dockFar) / 2 };
+    // Carnival sits on dry sand, off to the east side of the beach, well
+    // clear of the water — not built out over it on a dock.
+    carnivalCenter = { x: 110, z: (sandNear + sandFar) / 2 };
+    oceanStartZ = sandFar;
+    beachClampR = waterFar + 15; // lets the player/jet skis actually reach the new, bigger ocean
+
+    // Sand and ocean are both wide enough to fully cover the grass ground
+    // plane behind them — narrower planes used to leave grass visible
+    // flanking the beach at the edges of the view.
+    const COAST_WIDTH = 480;
 
     // Sand
     const sandMat = new THREE.MeshStandardMaterial({ color: 0xe9d5a1, roughness: 1 });
-    const sand = new THREE.Mesh(new THREE.PlaneGeometry(220, sandFar - sandNear), sandMat);
+    const sand = new THREE.Mesh(new THREE.PlaneGeometry(COAST_WIDTH, sandFar - sandNear), sandMat);
     sand.rotation.x = -Math.PI / 2;
     sand.position.set(cx, 0.02, (sandNear + sandFar) / 2);
     sand.receiveShadow = true;
     scene.add(sand);
 
     // Ocean — a coarse grid so per-vertex sine waves stay cheap, animated
-    // in updateOcean() every frame via the cached base Z offsets.
-    const oceanGeo = new THREE.PlaneGeometry(260, waterFar - sandFar, 26, 12);
-    const oceanMat = new THREE.MeshStandardMaterial({ color: 0x2f7fb8, roughness: 0.35, transparent: true, opacity: 0.88 });
+    // in updateOcean() every frame via the cached base Z offsets. A small
+    // Y offset alone wasn't enough to stop this from z-fighting against
+    // the world's grass ground plane at typical camera distances (visible
+    // as jagged green patches bleeding through the water), so this also
+    // uses a real polygonOffset to robustly win the depth test regardless
+    // of distance; opaque and more saturated for a cleaner, bluer look
+    // instead of the washed-out translucent teal it had before.
+    const oceanGeo = new THREE.PlaneGeometry(COAST_WIDTH, waterFar - sandFar, 26, 12);
+    const oceanMat = new THREE.MeshStandardMaterial({
+      color: 0x1565c0, roughness: 0.25,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
     oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
     oceanMesh.rotation.x = -Math.PI / 2;
-    oceanMesh.position.set(cx, 0, (sandFar + waterFar) / 2);
+    oceanMesh.position.set(cx, 0.05, (sandFar + waterFar) / 2);
     oceanMesh.receiveShadow = true;
     scene.add(oceanMesh);
     oceanBaseZ = Float32Array.from(oceanGeo.attributes.position.array);
 
     // Foam line at the shore
     const foamMat = new THREE.MeshStandardMaterial({ color: 0xf0f9ff, transparent: true, opacity: 0.55 });
-    const foam = new THREE.Mesh(new THREE.PlaneGeometry(220, 3), foamMat);
+    const foam = new THREE.Mesh(new THREE.PlaneGeometry(COAST_WIDTH, 3), foamMat);
     foam.rotation.x = -Math.PI / 2;
-    foam.position.set(cx, 0.03, sandFar);
+    foam.position.set(cx, 0.07, sandFar);
     scene.add(foam);
 
     addFloatingSign(cx, 3.2, sandNear + 6, '🏖️ BEACH');
@@ -1207,9 +1226,16 @@
     });
 
     // Jet skis parked right at the shoreline — walk a few steps into the
-    // shallow water and they're right there to steal.
-    [-16, 0, 16].forEach((x) => {
-      const mesh = makeJetSkiMesh();
+    // shallow water and they're right there to steal. Each one gets a
+    // different hull/accent color so they don't all look identical.
+    const jetskiPalette = [
+      { hull: 0xfacc15, accent: 0x1c1917 },
+      { hull: 0xef4444, accent: 0xf8fafc },
+      { hull: 0x3b82f6, accent: 0xfacc15 },
+    ];
+    [-16, 0, 16].forEach((x, i) => {
+      const colors = jetskiPalette[i % jetskiPalette.length];
+      const mesh = makeJetSkiMesh(colors.hull, colors.accent);
       const z = sandFar + 4;
       mesh.position.set(x, 0, z);
       // heading 0 = +Z = further out into open water, so driving forward
@@ -1218,42 +1244,37 @@
       vehicles.push({ mesh, x, z, heading: 0, speed: 0, occupied: false, type: 'jetski' });
     });
 
-    // Submarine, sticking halfway out of the water further offshore
+    // Submarine, sticking halfway out of the water far out to sea
     const sub = makeSubmarineMesh();
-    sub.position.set(72, 0, sandFar + 48);
+    sub.position.set(-25, 0, waterFar - 55);
     sub.rotation.y = Math.PI / 5;
     scene.add(sub);
-    buildingBoxes.push(boxOf(72, sandFar + 48, 4, 15, 3.2));
+    buildingBoxes.push(boxOf(-25, waterFar - 55, 4, 15, 3.2));
 
-    // Boardwalk dock connecting the sand to the carnival
-    const dockMat = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.9 });
-    const dock = new THREE.Mesh(new THREE.PlaneGeometry(86, dockFar - dockNear), dockMat);
-    dock.rotation.x = -Math.PI / 2;
-    dock.position.set(cx, 0.06, (dockNear + dockFar) / 2);
-    dock.receiveShadow = true;
-    scene.add(dock);
-    buildStairway(cx, sandFar - 6);
-
-    addFloatingSign(cx, 3.2, dockNear + 4, '🎡 CARNIVAL');
+    // Carnival — a small, compact corner of the beach, not spread across
+    // it: the rides are scaled down and clustered tightly together.
+    addFloatingSign(carnivalCenter.x, 3.2, carnivalCenter.z - 13, '🎡 CARNIVAL');
 
     // Ferris wheel
     const ferris = makeFerrisWheelGroup();
-    ferris.group.position.set(-24, 0, dockNear + 24);
+    ferris.group.scale.set(0.7, 0.7, 0.7);
+    ferris.group.position.set(carnivalCenter.x - 9, 0, carnivalCenter.z);
     scene.add(ferris.group);
     rides.push({ group: ferris.wheelGroup, axis: 'z', speed: 0.22 });
 
     // Carousel
     const carousel = makeCarouselGroup();
-    carousel.group.position.set(24, 0, dockNear + 24);
+    carousel.group.scale.set(0.7, 0.7, 0.7);
+    carousel.group.position.set(carnivalCenter.x + 10, 0, carnivalCenter.z);
     scene.add(carousel.group);
     rides.push({ group: carousel.discGroup, axis: 'y', speed: 0.55 });
 
     // Food stalls
     const stallSpots = [
-      { kind: 'hotdog', x: -38, z: dockNear + 12 },
-      { kind: 'burrito', x: 38, z: dockNear + 12 },
-      { kind: 'burger', x: -38, z: dockFar - 8 },
-      { kind: 'drink', x: 38, z: dockFar - 8 },
+      { kind: 'hotdog', x: carnivalCenter.x - 13, z: carnivalCenter.z - 7 },
+      { kind: 'burrito', x: carnivalCenter.x + 13, z: carnivalCenter.z - 7 },
+      { kind: 'burger', x: carnivalCenter.x - 13, z: carnivalCenter.z + 8 },
+      { kind: 'drink', x: carnivalCenter.x + 13, z: carnivalCenter.z + 8 },
     ];
     stallSpots.forEach((spot) => {
       const info = FOOD_KINDS[spot.kind];
@@ -1270,20 +1291,10 @@
     const arr = pos.array;
     for (let i = 0; i < arr.length; i += 3) {
       const vx = oceanBaseZ[i], vy = oceanBaseZ[i + 1];
-      arr[i + 2] = Math.sin(oceanTime * 1.3 + vx * 0.16 + vy * 0.12) * 0.3
-        + Math.sin(oceanTime * 0.8 - vy * 0.2) * 0.18;
+      arr[i + 2] = Math.sin(oceanTime * 1.3 + vx * 0.16 + vy * 0.12) * 0.16
+        + Math.sin(oceanTime * 0.8 - vy * 0.2) * 0.08;
     }
     pos.needsUpdate = true;
-  }
-
-  function buildStairway(x, zStart) {
-    const stepMat = new THREE.MeshStandardMaterial({ color: 0xa8825a, roughness: 0.9 });
-    for (let i = 0; i < 4; i++) {
-      const step = new THREE.Mesh(new THREE.BoxGeometry(4, 0.15, 1), stepMat);
-      step.position.set(x, 0.03 + i * 0.02, zStart + i * 1.1);
-      step.receiveShadow = true;
-      scene.add(step);
-    }
   }
 
   function makePalmTree(x, z) {
@@ -1318,19 +1329,55 @@
     return group;
   }
 
-  function makeJetSkiMesh() {
+  // A recognizable personal-watercraft silhouette — flat rear hull, a
+  // pointed wedge bow, a raised seat ridge, handlebars and a windshield —
+  // instead of the plain rounded capsule it used to be.
+  function makeJetSkiMesh(hullColor, accentColor) {
     const group = new THREE.Group();
-    const hullMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.5 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.7 });
-    const hull = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.8, 4, 8), hullMat);
-    hull.rotation.x = Math.PI / 2;
-    hull.position.y = 0.5;
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 1.1), darkMat);
-    seat.position.set(0, 0.85, -0.1);
-    const bars = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.04, 6, 10, Math.PI), darkMat);
-    bars.rotation.x = Math.PI / 2;
-    bars.position.set(0, 0.95, 1.1);
-    group.add(hull, seat, bars);
+    const hullMat = new THREE.MeshStandardMaterial({ color: hullColor !== undefined ? hullColor : 0xfacc15, roughness: 0.45 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: accentColor !== undefined ? accentColor : 0x1c1917, roughness: 0.7 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x93c5fd, roughness: 0.15, transparent: true, opacity: 0.55 });
+
+    // Flat-ish rear hull
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.4, 1.5), hullMat);
+    hull.position.set(0, 0.3, -0.25);
+    group.add(hull);
+
+    // Pointed bow — a 4-sided cone makes a simple wedge, flattened so it
+    // isn't just a spike
+    const bow = new THREE.Mesh(new THREE.ConeGeometry(0.48, 1.3, 4), hullMat);
+    bow.rotation.x = Math.PI / 2;
+    bow.rotation.y = Math.PI / 4;
+    bow.scale.set(1, 0.55, 1);
+    bow.position.set(0, 0.32, 0.9);
+    group.add(bow);
+
+    // Raised seat ridge down the centerline
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.22, 1.15), darkMat);
+    seat.position.set(0, 0.6, -0.2);
+    group.add(seat);
+
+    // Small windshield
+    const windshield = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.28, 0.04), glassMat);
+    windshield.rotation.x = -0.4;
+    windshield.position.set(0, 0.72, 0.5);
+    group.add(windshield);
+
+    // Handlebars
+    const barGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.44, 6);
+    [-0.13, 0.13].forEach((bx) => {
+      const bar = new THREE.Mesh(barGeo, darkMat);
+      bar.rotation.z = Math.PI / 2;
+      bar.position.set(bx, 0.7, 0.4);
+      group.add(bar);
+    });
+
+    // Rear water-jet nozzle
+    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.2, 8), darkMat);
+    nozzle.rotation.x = Math.PI / 2;
+    nozzle.position.set(0, 0.16, -1.05);
+    group.add(nozzle);
+
     group.traverse((c) => { c.castShadow = true; });
     return group;
   }
@@ -2216,7 +2263,7 @@
 
   // Wider than the city grid alone so the military base (out past the
   // east edge) still shows up on the full map instead of being clipped off.
-  const MAP_HALF = WORLD_HALF + 180;
+  const MAP_HALF = WORLD_HALF + 220;
 
   function worldToMapPx(x, z, size) {
     return {
@@ -2838,9 +2885,12 @@
     const preCrashSpeed = v.speed;
     const nx = v.x + Math.sin(v.heading) * v.speed * dt;
     const nz = v.z + Math.cos(v.heading) * v.speed * dt;
+    // Jet skis are water-only — treat the shoreline like a wall so they
+    // can't be driven up onto the sand or back into the city.
+    const onLand = (x, z) => v.type === 'jetski' && z < oceanStartZ;
     let hitWall = false;
-    if (!collidesWithBuildings(nx, v.z, 1.4) && !blockedByMilitaryGate(nx, v.z)) v.x = nx; else { v.speed *= 0.15; hitWall = true; }
-    if (!collidesWithBuildings(v.x, nz, 1.4) && !blockedByMilitaryGate(v.x, nz)) v.z = nz; else { v.speed *= 0.15; hitWall = true; }
+    if (!collidesWithBuildings(nx, v.z, 1.4) && !blockedByMilitaryGate(nx, v.z) && !onLand(nx, v.z)) v.x = nx; else { v.speed *= 0.15; hitWall = true; }
+    if (!collidesWithBuildings(v.x, nz, 1.4) && !blockedByMilitaryGate(v.x, nz) && !onLand(v.x, nz)) v.z = nz; else { v.speed *= 0.15; hitWall = true; }
     if (hitWall && Math.abs(preCrashSpeed) > 6) triggerCrashFx(Math.abs(preCrashSpeed), v);
 
     // Cars used to just drive straight through each other — bump into one
@@ -2918,7 +2968,13 @@
       const speed = 5;
       const nx = v.x + Math.sin(v.heading) * speed * dt;
       const nz = v.z + Math.cos(v.heading) * speed * dt;
-      if (!collidesWithBuildings(nx, nz, 1.4) && isOnRoad(nx, nz, 0.5)) {
+      // isOnRoad() checks alignment with the road grid using a periodic
+      // (modulo) pattern with no edge — without an explicit bounds check
+      // here, a car driving straight off the outermost boundary road reads
+      // as "still on a road" forever and keeps going, right off the city
+      // and onto the beach.
+      const inCityBounds = Math.abs(nx) <= WORLD_HALF + ROAD_WIDTH / 2 + 1 && Math.abs(nz) <= WORLD_HALF + ROAD_WIDTH / 2 + 1;
+      if (!collidesWithBuildings(nx, nz, 1.4) && isOnRoad(nx, nz, 0.5) && inCityBounds) {
         v.x = nx; v.z = nz;
       } else {
         // Shouldn't normally happen given the grid-snapped turns above, but
@@ -3089,7 +3145,7 @@
     }
     let spot;
     if (v.type === 'tank' || v.type === 'jet' || v.type === 'jeep') spot = randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 20, 3);
-    else if (v.type === 'jetski') spot = { x: (Math.random() * 2 - 1) * 16, z: beachCenter.z + 25 };
+    else if (v.type === 'jetski') spot = { x: (Math.random() * 2 - 1) * 16, z: oceanStartZ + 15 };
     else if (v.occupied) spot = randomRoadSpot();
     else spot = randomOpenSpot(3);
     v.x = spot.x; v.z = spot.z;
