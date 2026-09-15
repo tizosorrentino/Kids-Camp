@@ -89,6 +89,8 @@
     nearPizza: null,
     nearRecruiter: false,
     nearApartment: null,
+    nearFoodStall: null,
+    aimMarkerOn: false,
     hasBaseAccess: false,
     lastShotTime: 0,
   };
@@ -262,6 +264,44 @@
     });
   }
 
+  // A simple, generic cartoon face (eyes + brows + mouth) painted once onto
+  // a shared, cached canvas texture — every character reuses the same
+  // decal rather than rebuilding a canvas on every customizer tweak.
+  let faceTextureCache = null;
+  function getFaceTexture() {
+    if (faceTextureCache) return faceTextureCache;
+    const canvas = document.createElement('canvas');
+    canvas.width = 128; canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 128, 96);
+    ctx.fillStyle = '#1e293b';
+    // eyes
+    [40, 88].forEach((ex) => {
+      ctx.beginPath();
+      ctx.ellipse(ex, 40, 10, 7, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#f8fafc';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(ex, 41, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#1e293b';
+      ctx.fill();
+    });
+    // eyebrows
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    [[30, 25, 50, 22], [78, 22, 98, 25]].forEach(([x1, y1, x2, y2]) => {
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    });
+    // mouth
+    ctx.beginPath();
+    ctx.arc(64, 62, 16, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+    faceTextureCache = new THREE.CanvasTexture(canvas);
+    return faceTextureCache;
+  }
+
   // Builds a low-poly humanoid mesh from a character config. Reused for
   // both the customizer preview and the actual in-world player model.
   function buildCharacterMesh(cfg) {
@@ -271,22 +311,23 @@
     const shirtMat = new THREE.MeshStandardMaterial({ color: cfg.shirt, roughness: 0.7 });
     const pantsMat = new THREE.MeshStandardMaterial({ color: cfg.pants, roughness: 0.7 });
 
-    // Legs — shorts show skin below a shorter pants section; both are
-    // grouped with the pivot kept at the same height as a plain pants leg
-    // so the walk-swing animation looks the same either way.
+    // Legs — rounded capsules read as actual limbs instead of Minecraft-y
+    // blocks. Shorts show a bare-skin capsule shin below a short pants cuff;
+    // both are grouped with the pivot kept at the same height as a plain
+    // pants leg so the walk-swing animation looks the same either way.
     let legL, legR;
     if (cfg.bottom === 'shorts') {
       legL = new THREE.Group(); legL.position.set(-0.16, 0.375, 0);
       legR = new THREE.Group(); legR.position.set(0.16, 0.375, 0);
       [legL, legR].forEach((leg) => {
-        const shortPart = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.32, 0.29), pantsMat);
+        const shortPart = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.145, 0.32, 8), pantsMat);
         shortPart.position.set(0, 0.215, 0);
-        const shin = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.44, 0.24), skinMat);
+        const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.28, 4, 8), skinMat);
         shin.position.set(0, -0.155, 0);
         leg.add(shortPart, shin);
       });
     } else {
-      const legGeo = new THREE.BoxGeometry(0.28, 0.75, 0.28);
+      const legGeo = new THREE.CapsuleGeometry(0.13, 0.49, 4, 8);
       legL = new THREE.Mesh(legGeo, pantsMat);
       legL.position.set(-0.16, 0.375, 0);
       legR = new THREE.Mesh(legGeo, pantsMat);
@@ -294,9 +335,12 @@
     }
     group.add(legL, legR);
 
-    // Torso
-    const torsoGeo = new THREE.BoxGeometry(0.62, 0.68, 0.36);
+    // Torso — a tapered cylinder (shoulders wider than waist), squashed
+    // front-to-back so it keeps the same flattened silhouette the old box
+    // had rather than reading as a tube.
+    const torsoGeo = new THREE.CylinderGeometry(0.33, 0.25, 0.68, 10);
     const torso = new THREE.Mesh(torsoGeo, shirtMat);
+    torso.scale.set(1, 1, 0.58);
     torso.position.set(0, 1.09, 0);
     group.add(torso);
 
@@ -316,8 +360,8 @@
       group.add(pocket, hood);
     }
 
-    // Arms
-    const armGeo = new THREE.BoxGeometry(0.22, 0.62, 0.22);
+    // Arms — rounded capsules to match the new legs/torso
+    const armGeo = new THREE.CapsuleGeometry(0.1, 0.42, 4, 8);
     const armL = new THREE.Mesh(armGeo, shirtMat);
     armL.position.set(-0.44, 1.08, 0);
     const armR = new THREE.Mesh(armGeo, shirtMat);
@@ -332,15 +376,26 @@
     handR.position.set(0.44, 0.74, 0);
     group.add(handL, handR);
 
-    // Head
+    // Head — a slightly oval sphere (taller, a bit flatter front-to-back)
+    // reads more like an actual head than a perfect ball.
     const headGeo = new THREE.SphereGeometry(0.26, 16, 16);
     const head = new THREE.Mesh(headGeo, skinMat);
+    head.scale.set(0.92, 1.08, 0.96);
     head.position.set(0, 1.62, 0);
     group.add(head);
 
+    // Simple face — eyes, brows and a mouth painted onto a small decal
+    // plane in front of the head, so there's an actual face instead of a
+    // blank ball. Deliberately generic/cartoon, not modeled on anyone.
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.24), new THREE.MeshBasicMaterial({
+      map: getFaceTexture(), transparent: true, depthWrite: false,
+    }));
+    face.position.set(0, 1.635, 0.245);
+    group.add(face);
+
     // Nose
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), skinMat);
-    nose.position.set(0, 1.60, 0.26);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), skinMat);
+    nose.position.set(0, 1.60, 0.25);
     group.add(nose);
 
     // Hair (hidden under a hat, since the hat already covers this area)
@@ -550,7 +605,7 @@
 
   let renderer, scene, camera;
   let clock;
-  let player, playerMesh;
+  let player, playerMesh, playerAimMarker;
   let buildingBoxes = []; // {minX,maxX,minZ,maxZ}
   let vehicles = [];
   let robots = [];
@@ -559,10 +614,18 @@
   let banks = []; // {x, z, cooldownUntil}
   let pizzaPlaces = []; // {x, z, cooldownUntil}
   let apartments = []; // {x, z, price, owned}
+  let foodStalls = []; // {x, z, kind, price, cooldownUntil}
+  let rides = []; // {group, axis, speed} — ferris wheel / carousel spin animation
+  let beachCenter = null;
+  let carnivalCenter = null;
+  let oceanMesh = null;
+  let oceanBaseZ = null;
+  let oceanTime = 0;
   let shopMarkerPos = null;
   let gameStarted = false;
   let cameraYaw = Math.PI; // starts behind the player's default spawn heading (0)
   let cameraPitch = 0.28;
+  let cameraFollowY = 0; // smoothed player.y so jumps don't snap the view — see updateCamera
   const CAMERA_DIST = 7.5;
   let crashShakeTime = 0;
   let crashShakeMag = 0;
@@ -575,6 +638,7 @@
     buildCity();
     buildMilitaryBase();
     buildMountains();
+    buildBeachCarnival();
     if (pendingApartmentsOwned) {
       apartments.forEach((a, i) => { if (pendingApartmentsOwned[i]) a.owned = true; });
     }
@@ -1081,6 +1145,309 @@
     });
   }
 
+  // ------------------------------------------------------------
+  // Beach & Carnival — sand + an animated ocean out past the south edge
+  // of the city, jet skis parked at the shoreline, a half-submerged
+  // submarine out in open water, and a boardwalk carnival (Ferris wheel,
+  // carousel, four food stalls) reachable by a short flight of steps up
+  // from the sand. Nothing here needs a new clamp radius — it all sits
+  // well inside the radius the Military Base already opened up.
+  // ------------------------------------------------------------
+  const FOOD_KINDS = {
+    hotdog: { emoji: '🌭', name: 'Hot Dog', price: 8, color: 0xdc2626 },
+    burrito: { emoji: '🌯', name: 'Burrito', price: 10, color: 0x16a34a },
+    burger: { emoji: '🍔', name: 'Burger', price: 12, color: 0xca8a04 },
+    drink: { emoji: '🥤', name: 'Drink', price: 5, color: 0x2563eb },
+  };
+
+  function buildBeachCarnival() {
+    const cx = 0;
+    const sandNear = WORLD_HALF + 10;   // 136 — just past the city's outer sidewalk
+    const sandFar = sandNear + 54;      // 190 — shoreline
+    const waterFar = sandFar + 68;      // 258 — well inside the existing 266 world clamp
+    const dockNear = sandFar - 2;
+    const dockFar = sandFar + 40;       // 228
+    beachCenter = { x: cx, z: (sandNear + sandFar) / 2 };
+    carnivalCenter = { x: cx, z: (dockNear + dockFar) / 2 };
+
+    // Sand
+    const sandMat = new THREE.MeshStandardMaterial({ color: 0xe9d5a1, roughness: 1 });
+    const sand = new THREE.Mesh(new THREE.PlaneGeometry(220, sandFar - sandNear), sandMat);
+    sand.rotation.x = -Math.PI / 2;
+    sand.position.set(cx, 0.02, (sandNear + sandFar) / 2);
+    sand.receiveShadow = true;
+    scene.add(sand);
+
+    // Ocean — a coarse grid so per-vertex sine waves stay cheap, animated
+    // in updateOcean() every frame via the cached base Z offsets.
+    const oceanGeo = new THREE.PlaneGeometry(260, waterFar - sandFar, 26, 12);
+    const oceanMat = new THREE.MeshStandardMaterial({ color: 0x2f7fb8, roughness: 0.35, transparent: true, opacity: 0.88 });
+    oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
+    oceanMesh.rotation.x = -Math.PI / 2;
+    oceanMesh.position.set(cx, 0, (sandFar + waterFar) / 2);
+    oceanMesh.receiveShadow = true;
+    scene.add(oceanMesh);
+    oceanBaseZ = Float32Array.from(oceanGeo.attributes.position.array);
+
+    // Foam line at the shore
+    const foamMat = new THREE.MeshStandardMaterial({ color: 0xf0f9ff, transparent: true, opacity: 0.55 });
+    const foam = new THREE.Mesh(new THREE.PlaneGeometry(220, 3), foamMat);
+    foam.rotation.x = -Math.PI / 2;
+    foam.position.set(cx, 0.03, sandFar);
+    scene.add(foam);
+
+    addFloatingSign(cx, 3.2, sandNear + 6, '🏖️ BEACH');
+
+    // Decorative palm trees + umbrellas on the sand
+    [[-70, sandNear + 14], [-55, sandNear + 30], [66, sandNear + 12], [60, sandNear + 34]].forEach(([x, z]) => {
+      scene.add(makePalmTree(x, z));
+    });
+    [[-30, sandNear + 18], [32, sandNear + 22]].forEach(([x, z]) => {
+      scene.add(makeBeachUmbrella(x, z));
+    });
+
+    // Jet skis parked right at the shoreline — walk a few steps into the
+    // shallow water and they're right there to steal.
+    [-16, 0, 16].forEach((x) => {
+      const mesh = makeJetSkiMesh();
+      const z = sandFar + 4;
+      mesh.position.set(x, 0, z);
+      mesh.rotation.y = Math.PI;
+      scene.add(mesh);
+      vehicles.push({ mesh, x, z, heading: Math.PI, speed: 0, occupied: false, type: 'jetski' });
+    });
+
+    // Submarine, sticking halfway out of the water further offshore
+    const sub = makeSubmarineMesh();
+    sub.position.set(72, 0, sandFar + 48);
+    sub.rotation.y = Math.PI / 5;
+    scene.add(sub);
+    buildingBoxes.push(boxOf(72, sandFar + 48, 4, 15, 3.2));
+
+    // Boardwalk dock connecting the sand to the carnival
+    const dockMat = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.9 });
+    const dock = new THREE.Mesh(new THREE.PlaneGeometry(86, dockFar - dockNear), dockMat);
+    dock.rotation.x = -Math.PI / 2;
+    dock.position.set(cx, 0.06, (dockNear + dockFar) / 2);
+    dock.receiveShadow = true;
+    scene.add(dock);
+    buildStairway(cx, sandFar - 6);
+
+    addFloatingSign(cx, 3.2, dockNear + 4, '🎡 CARNIVAL');
+
+    // Ferris wheel
+    const ferris = makeFerrisWheelGroup();
+    ferris.group.position.set(-24, 0, dockNear + 24);
+    scene.add(ferris.group);
+    rides.push({ group: ferris.wheelGroup, axis: 'z', speed: 0.22 });
+
+    // Carousel
+    const carousel = makeCarouselGroup();
+    carousel.group.position.set(24, 0, dockNear + 24);
+    scene.add(carousel.group);
+    rides.push({ group: carousel.discGroup, axis: 'y', speed: 0.55 });
+
+    // Food stalls
+    const stallSpots = [
+      { kind: 'hotdog', x: -38, z: dockNear + 12 },
+      { kind: 'burrito', x: 38, z: dockNear + 12 },
+      { kind: 'burger', x: -38, z: dockFar - 8 },
+      { kind: 'drink', x: 38, z: dockFar - 8 },
+    ];
+    stallSpots.forEach((spot) => {
+      const info = FOOD_KINDS[spot.kind];
+      scene.add(makeFoodStallMesh(spot.x, spot.z, info));
+      buildingBoxes.push(boxOf(spot.x, spot.z, 2, 1.8));
+      foodStalls.push({ x: spot.x, z: spot.z, kind: spot.kind, price: info.price, cooldownUntil: 0 });
+    });
+  }
+
+  function updateOcean(dt) {
+    if (!oceanMesh) return;
+    oceanTime += dt;
+    const pos = oceanMesh.geometry.attributes.position;
+    const arr = pos.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      const vx = oceanBaseZ[i], vy = oceanBaseZ[i + 1];
+      arr[i + 2] = Math.sin(oceanTime * 1.3 + vx * 0.16 + vy * 0.12) * 0.3
+        + Math.sin(oceanTime * 0.8 - vy * 0.2) * 0.18;
+    }
+    pos.needsUpdate = true;
+  }
+
+  function buildStairway(x, zStart) {
+    const stepMat = new THREE.MeshStandardMaterial({ color: 0xa8825a, roughness: 0.9 });
+    for (let i = 0; i < 4; i++) {
+      const step = new THREE.Mesh(new THREE.BoxGeometry(4, 0.15, 1), stepMat);
+      step.position.set(x, 0.03 + i * 0.02, zStart + i * 1.1);
+      step.receiveShadow = true;
+      scene.add(step);
+    }
+  }
+
+  function makePalmTree(x, z) {
+    const group = new THREE.Group();
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8a6240, roughness: 0.9 });
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f8f4e, roughness: 0.8 });
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.24, 4, 6), trunkMat);
+    trunk.position.y = 2;
+    trunk.rotation.z = 0.12;
+    group.add(trunk);
+    for (let i = 0; i < 5; i++) {
+      const frond = new THREE.Mesh(new THREE.ConeGeometry(0.35, 2.4, 4), leafMat);
+      frond.position.set(0.2, 4.1, 0);
+      frond.rotation.z = Math.PI / 2.3;
+      frond.rotation.y = (i / 5) * Math.PI * 2;
+      group.add(frond);
+    }
+    group.position.set(x, 0, z);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function makeBeachUmbrella(x, z) {
+    const group = new THREE.Group();
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.8, 6), new THREE.MeshStandardMaterial({ color: 0xf1f5f9 }));
+    pole.position.y = 0.9;
+    const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.3, 0.7, 8), new THREE.MeshStandardMaterial({ color: 0xef4444 }));
+    canopy.position.y = 1.9;
+    group.add(pole, canopy);
+    group.position.set(x, 0, z);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function makeJetSkiMesh() {
+    const group = new THREE.Group();
+    const hullMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.5 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.7 });
+    const hull = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.8, 4, 8), hullMat);
+    hull.rotation.x = Math.PI / 2;
+    hull.position.y = 0.5;
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 1.1), darkMat);
+    seat.position.set(0, 0.85, -0.1);
+    const bars = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.04, 6, 10, Math.PI), darkMat);
+    bars.rotation.x = Math.PI / 2;
+    bars.position.set(0, 0.95, 1.1);
+    group.add(hull, seat, bars);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function makeSubmarineMesh() {
+    const group = new THREE.Group();
+    const hullMat = new THREE.MeshStandardMaterial({ color: 0x3f4a4f, roughness: 0.55, metalness: 0.3 });
+    const hull = new THREE.Mesh(new THREE.CapsuleGeometry(3.2, 9, 6, 12), hullMat);
+    hull.rotation.x = Math.PI / 2;
+    hull.position.y = 0;
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(2, 2.4, 3.2), hullMat);
+    tower.position.set(0, 3.6, 0);
+    const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2, 6), hullMat);
+    scope.position.set(0, 5.4, 0);
+    group.add(hull, tower, scope);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function makeFerrisWheelGroup() {
+    const outer = new THREE.Group();
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.5, roughness: 0.4 });
+    const legGeo = new THREE.BoxGeometry(0.35, 9.5, 0.35);
+    [-1, 1].forEach((side) => {
+      [-1, 1].forEach((front) => {
+        const leg = new THREE.Mesh(legGeo, steelMat);
+        leg.position.set(side * 6.2, 4.75, front * 1.2);
+        leg.rotation.z = side * 0.18;
+        outer.add(leg);
+      });
+    });
+
+    const wheelGroup = new THREE.Group();
+    wheelGroup.position.set(0, 9, 0);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(6.5, 0.22, 8, 20), steelMat);
+    wheelGroup.add(rim);
+    const gondolaColors = [0xef4444, 0xf59e0b, 0x22c55e, 0x3b82f6, 0xa855f7, 0xec4899, 0x14b8a6, 0xf97316];
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 6.5, 6), steelMat);
+      spoke.rotation.z = Math.PI / 2 - angle; // point radially outward at this angle in the wheel's XY plane
+      spoke.position.set(Math.cos(angle) * 3.25, Math.sin(angle) * 3.25, 0);
+      wheelGroup.add(spoke);
+      const gondola = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1, 0.9), new THREE.MeshStandardMaterial({ color: gondolaColors[i] }));
+      gondola.position.set(Math.cos(angle) * 6.5, Math.sin(angle) * 6.5, 0);
+      wheelGroup.add(gondola);
+    }
+    outer.add(wheelGroup);
+    outer.traverse((c) => { c.castShadow = true; });
+    return { group: outer, wheelGroup };
+  }
+
+  function makeCarouselGroup() {
+    const outer = new THREE.Group();
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0xd4d4d8, roughness: 0.6 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(5, 5.2, 0.4, 16), baseMat);
+    base.position.y = 0.2;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 4, 8), new THREE.MeshStandardMaterial({ color: 0xfacc15 }));
+    pole.position.y = 2.2;
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(5.6, 1.8, 16), new THREE.MeshStandardMaterial({ color: 0xef4444 }));
+    roof.position.y = 5;
+    outer.add(base, pole, roof);
+
+    const discGroup = new THREE.Group();
+    discGroup.position.y = 0.45;
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 4.6, 0.2, 16), new THREE.MeshStandardMaterial({ color: 0xfde68a }));
+    discGroup.add(disc);
+    const horseColors = [0xf87171, 0x60a5fa, 0x34d399, 0xfbbf24, 0xc084fc, 0xf472b6];
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const horseGroup = new THREE.Group();
+      const poleH = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.6, 6), new THREE.MeshStandardMaterial({ color: 0xe5e7eb }));
+      poleH.position.y = 0.9;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.35), new THREE.MeshStandardMaterial({ color: horseColors[i] }));
+      body.position.y = 1.5;
+      horseGroup.add(poleH, body);
+      horseGroup.position.set(Math.cos(angle) * 3.2, 0, Math.sin(angle) * 3.2);
+      discGroup.add(horseGroup);
+    }
+    outer.add(discGroup);
+    outer.traverse((c) => { c.castShadow = true; });
+    return { group: outer, discGroup };
+  }
+
+  function makeFoodStallMesh(x, z, info) {
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: info.color, roughness: 0.7 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.8 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.4, 1.6), bodyMat);
+    body.position.y = 0.7;
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.2, 2), roofMat);
+    roof.position.y = 1.5;
+    group.add(body, roof);
+    group.position.set(x, 0, z);
+    group.traverse((c) => { c.castShadow = true; c.receiveShadow = true; });
+    addFloatingSign(x, 2.6, z, `${info.emoji} ${info.name} $${info.price}`);
+    return group;
+  }
+
+  function buyFood(stall) {
+    const now = performance.now() / 1000;
+    if (now < stall.cooldownUntil) {
+      toast('🍽️ Still cooking — try again in a bit.');
+      return;
+    }
+    const info = FOOD_KINDS[stall.kind];
+    if (state.money < stall.price) {
+      toast(`${info.emoji} You need $${stall.price} for a ${info.name.toLowerCase()}.`);
+      return;
+    }
+    state.money -= stall.price;
+    stall.cooldownUntil = now + 8;
+    healPlayer(15);
+    updateHUDMoney();
+    writeSave();
+    toast(`${info.emoji} Bought a ${info.name}! +15 health`, 2200);
+  }
+
   function makeTankMesh() {
     const group = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x556b2f, roughness: 0.75 });
@@ -1201,11 +1568,42 @@
   // ------------------------------------------------------------
   // Player
   // ------------------------------------------------------------
+  // A small always-camera-facing target reticle that floats above the
+  // player's head — toggled on/off with the 🎯 button, replacing the old
+  // fixed screen-center crosshair that used to sit right on top of the
+  // character in third person.
+  function makeAimMarkerSprite() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 96; canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(48, 48, 28, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(48, 6); ctx.lineTo(48, 22);
+    ctx.moveTo(48, 74); ctx.lineTo(48, 90);
+    ctx.moveTo(6, 48); ctx.lineTo(22, 48);
+    ctx.moveTo(74, 48); ctx.lineTo(90, 48);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(48, 48, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ef4444';
+    ctx.fill();
+    const tex = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    sprite.scale.set(0.5, 0.5, 1);
+    sprite.position.set(0, 2.18, 0); // clears every hat style (crown spikes top out around 1.94)
+    sprite.visible = false;
+    return sprite;
+  }
+
   function createPlayer() {
     playerMesh = buildCharacterMesh(Object.assign({}, state.character, { weapon: state.currentWeaponId }));
     playerMesh.castShadow = true;
     playerMesh.traverse((c) => { c.castShadow = true; });
     scene.add(playerMesh);
+    playerAimMarker = makeAimMarkerSprite();
+    playerMesh.add(playerAimMarker);
 
     player = {
       x: 4, z: 10, heading: 0, speed: 0,
@@ -1466,6 +1864,9 @@
     $('btn-phone').addEventListener('click', openPhone);
     $('btn-map').addEventListener('click', openMap);
     $('btn-weapons').addEventListener('click', openWeaponWheel);
+    $('btn-aim-marker').addEventListener('click', () => {
+      state.aimMarkerOn = !state.aimMarkerOn;
+    });
     $('btn-clear-waypoint').addEventListener('click', () => {
       state.waypoint = null;
       $('waypoint-info').classList.add('hidden');
@@ -1531,10 +1932,6 @@
     const cooldown = 1 / w.rate;
     if (now - state.lastShotTime < cooldown) return;
     state.lastShotTime = now;
-
-    const crosshairEl = $('crosshair');
-    crosshairEl.classList.add('firing');
-    setTimeout(() => crosshairEl.classList.remove('firing'), 90);
 
     // Muzzle flash-ish quick blast effect + hit detection along player facing direction
     const originX = player.x, originZ = player.z;
@@ -1886,6 +2283,15 @@
       mapCtx.fillText(apt.owned ? '🏠' : '🔒', p.px, p.py + 6);
     });
 
+    if (beachCenter) {
+      const p = worldToMapPx(beachCenter.x, beachCenter.z, size);
+      mapCtx.fillText('🏖️', p.px, p.py + 6);
+    }
+    if (carnivalCenter) {
+      const p = worldToMapPx(carnivalCenter.x, carnivalCenter.z, size);
+      mapCtx.fillText('🎡', p.px, p.py + 6);
+    }
+
     // robots
     mapCtx.fillStyle = '#ef4444';
     robots.forEach((r) => {
@@ -2042,6 +2448,18 @@
       miniCtx.textAlign = 'center';
       miniCtx.fillText(apt.owned ? '🏠' : '🔒', p.px, p.py + 4);
     });
+    if (beachCenter && Math.hypot(beachCenter.x - player.x, beachCenter.z - player.z) < MINI_RANGE) {
+      const p = toMini(beachCenter.x, beachCenter.z);
+      miniCtx.font = '13px sans-serif';
+      miniCtx.textAlign = 'center';
+      miniCtx.fillText('🏖️', p.px, p.py + 4);
+    }
+    if (carnivalCenter && Math.hypot(carnivalCenter.x - player.x, carnivalCenter.z - player.z) < MINI_RANGE) {
+      const p = toMini(carnivalCenter.x, carnivalCenter.z);
+      miniCtx.font = '13px sans-serif';
+      miniCtx.textAlign = 'center';
+      miniCtx.fillText('🎡', p.px, p.py + 4);
+    }
 
     // player arrow (always centered, points with heading) — same direct
     // forward-vector construction as drawMap(), see the comment there.
@@ -2164,6 +2582,16 @@
     }
     state.nearApartment = nearApartment;
 
+    // nearest food stall
+    let nearFoodStall = null, nearFoodStallDist = 6;
+    if (!state.inVehicle) {
+      for (const stall of foodStalls) {
+        const d = Math.hypot(stall.x - player.x, stall.z - player.z);
+        if (d < nearFoodStallDist) { nearFoodStall = stall; nearFoodStallDist = d; }
+      }
+    }
+    state.nearFoodStall = nearFoodStall;
+
     const promptEl = $('prompt-banner');
     if (state.inVehicle) {
       promptEl.textContent = 'Press 🚪 or E to exit the car';
@@ -2207,6 +2635,13 @@
         promptEl.classList.remove('hidden');
         promptEl.onclick = () => buyApartment(apt);
       }
+    } else if (state.nearFoodStall) {
+      const stall = state.nearFoodStall;
+      const info = FOOD_KINDS[stall.kind];
+      const locked = performance.now() / 1000 < stall.cooldownUntil;
+      promptEl.textContent = locked ? `${info.emoji} Still cooking — check back soon` : `Tap here to buy a ${info.name.toLowerCase()} ($${info.price}) ${info.emoji}`;
+      promptEl.classList.remove('hidden');
+      promptEl.onclick = () => buyFood(stall);
     } else {
       promptEl.classList.add('hidden');
       promptEl.onclick = null;
@@ -2384,8 +2819,8 @@
 
     // Tanks are slower and heavier-feeling; jets are quick on the ground
     // (no actual flight — see the chat for why that's out of scope).
-    const maxSpeed = v.type === 'tank' ? 10 : v.type === 'jet' ? 24 : 18;
-    const accel = v.type === 'tank' ? 8 : v.type === 'jet' ? 16 : 14;
+    const maxSpeed = v.type === 'tank' ? 10 : v.type === 'jet' ? 24 : v.type === 'jetski' ? 20 : 18;
+    const accel = v.type === 'tank' ? 8 : v.type === 'jet' ? 16 : v.type === 'jetski' ? 15 : 14;
     if (Math.abs(throttle) > 0.05) {
       v.speed += throttle * accel * dt;
     } else {
@@ -2595,9 +3030,16 @@
     }
 
     const dist = state.inVehicle ? CAMERA_DIST + 2 : CAMERA_DIST;
+
+    // Smoothly chase the player's height instead of snapping straight to it —
+    // a 1:1 follow made a double-jump yank the whole view upward with the
+    // character; lerping keeps a jump feeling like a jump instead of a
+    // camera lurch, while still catching up quickly enough not to lose them.
+    cameraFollowY += (player.y - cameraFollowY) * Math.min(1, dt * 5);
+
     let camX = player.x + Math.sin(cameraYaw) * dist * Math.cos(cameraPitch);
     let camZ = player.z + Math.cos(cameraYaw) * dist * Math.cos(cameraPitch);
-    let camY = 2.2 + dist * Math.sin(cameraPitch);
+    let camY = cameraFollowY + 2.2 + dist * Math.sin(cameraPitch);
 
     if (crashShakeTime > 0) {
       crashShakeTime = Math.max(0, crashShakeTime - dt);
@@ -2608,7 +3050,7 @@
     }
 
     camera.position.set(camX, camY, camZ);
-    camera.lookAt(player.x, 1.3, player.z);
+    camera.lookAt(player.x, cameraFollowY + 1.3, player.z);
   }
 
   // Ramming a building at speed now actually feels like a crash: a hard
@@ -2646,6 +3088,7 @@
     }
     let spot;
     if (v.type === 'tank' || v.type === 'jet' || v.type === 'jeep') spot = randomOpenSpotNear(militaryBaseCenter.x, militaryBaseCenter.z, 20, 3);
+    else if (v.type === 'jetski') spot = { x: (Math.random() * 2 - 1) * 16, z: beachCenter.z + 25 };
     else if (v.occupied) spot = randomRoadSpot();
     else spot = randomOpenSpot(3);
     v.x = spot.x; v.z = spot.z;
@@ -2737,12 +3180,14 @@
     updateRobots(dt);
     updatePedestrians(dt);
     updateCoins();
+    updateOcean(dt);
+    rides.forEach((r) => { r.group.rotation[r.axis] += r.speed * dt; });
     updateProximity();
     updateCamera(dt);
     checkMissionArrival();
     drawMinimap();
     updateCompassAndWaypointInfo();
-    $('crosshair').classList.toggle('hidden', !!state.inVehicle);
+    if (playerAimMarker) playerAimMarker.visible = state.aimMarkerOn && !state.inVehicle;
 
     renderer.render(scene, camera);
   }
@@ -2752,19 +3197,23 @@
   window.BlasterCity = {
     get state() { return state; },
     get player() { return player; },
+    get playerAimMarker() { return playerAimMarker; },
     get vehicles() { return vehicles; },
     get robots() { return robots; },
     get pedestrians() { return pedestrians; },
     get banks() { return banks; },
     get pizzaPlaces() { return pizzaPlaces; },
     get apartments() { return apartments; },
+    get foodStalls() { return foodStalls; },
+    get beachCenter() { return beachCenter; },
+    get carnivalCenter() { return carnivalCenter; },
     get militaryBaseCenter() { return militaryBaseCenter; },
     get militaryGateBox() { return militaryGateBox; },
     get buildingBoxes() { return buildingBoxes; },
     get cameraYaw() { return cameraYaw; },
     set cameraYaw(v) { cameraYaw = v; },
     fireWeapon, tryEnterExitVehicle, startMission, openShop, robBank, grabPizza, getMilitaryJob, blockedByMilitaryGate,
-    getFloorHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment, restAtApartment,
+    getFloorHeightAt, triggerCrashFx, explodeVehicle, healPlayer, damagePlayer, buyApartment, restAtApartment, buyFood,
     CONTACTS, WEAPONS,
   };
 

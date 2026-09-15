@@ -16,14 +16,34 @@
 
   <!-- ===================== START SCREEN ===================== -->
   <div id="start-overlay" class="overlay">
-    <div class="overlay-card">
-      <h1 id="game-title">🏙️ BLASTER CITY 3D 🚗</h1>
+    <div class="cover-grid" aria-hidden="true">
+      <div class="cover-panel cp-1">🚗</div>
+      <div class="cover-panel cp-2">💦</div>
+      <div class="cover-panel cp-3">🤖</div>
+      <div class="cover-panel cp-4">🏙️</div>
+      <div class="cover-panel cp-5">🎡</div>
+      <div class="cover-panel cp-6">🏄</div>
+      <div class="cover-panel cp-7">🪖</div>
+      <div class="cover-panel cp-8">🏠</div>
+      <div class="cover-panel cp-9">🍕</div>
+    </div>
+    <div class="cover-scrim" aria-hidden="true"></div>
+    <div class="cover-titleblock">
+      <div class="cover-title-line">BLASTER</div>
+      <div class="cover-title-line">CITY</div>
+      <div class="cover-title-row">
+        <div class="cover-title-3d">3D</div>
+        <div class="cover-badge">KIDS<br>EDITION</div>
+      </div>
+    </div>
+    <div class="overlay-card cover-card">
       <p class="subtitle">An open-world blaster &amp; driving adventure!</p>
       <ul class="feature-list">
         <li>🕹️ Drive cars around the city with a GPS map</li>
         <li>💦 Buy blasters at the Blaster Shop</li>
         <li>📱 Call contacts on your phone for missions</li>
         <li>🤖 Bust glitching robots for cash</li>
+        <li>🏖️ Ride jet skis and explore the beach carnival</li>
         <li>🎨 Customize your character</li>
       </ul>
       <button id="btn-to-customize" class="big-button">Next: Customize My Character ▶</button>
@@ -78,7 +98,8 @@
     <div id="icon-buttons">
       <button id="btn-phone" class="icon-button" title="Phone">📱</button>
       <button id="btn-map" class="icon-button" title="Map">🗺️</button>
-      <button id="btn-weapons" class="icon-button" title="Weapons">🎯</button>
+      <button id="btn-weapons" class="icon-button" title="Weapons">🧰</button>
+      <button id="btn-aim-marker" class="icon-button" title="Aim Marker">🎯</button>
     </div>
 
     <!-- ===================== TOUCH CONTROLS ===================== -->
@@ -98,10 +119,6 @@
 
     <div id="look-zone">
       <div id="look-hint">👀 Drag here to look up/down/around</div>
-    </div>
-
-    <div id="crosshair" class="hidden">
-      <div id="crosshair-dot"></div>
     </div>
 
     <div id="controls-hint">
