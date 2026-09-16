@@ -54,6 +54,7 @@
   // of having to find one lying around the vault room every time.
   const TOOLS = [
     { id: 'screwdriver', name: 'Screwdriver', icon: '🪛', price: 80, desc: 'Skip hunting for one during a bank heist — you already have it on you.' },
+    { id: 'hammer', name: 'Hammer', icon: '🔨', price: 80, desc: 'Skip hunting for one during a bank heist — you already have it on you.' },
   ];
   const MAX_AMMO = 20; // fists don't need ammo — everything else has to be refilled at the shop
   const MAX_RELOADS = 20; // an empty mag auto-reloads on its own up to this many times before a shop trip is required
@@ -81,7 +82,7 @@
   const state = {
     money: 300,
     ownedWeapons: ['fists', 'water'],
-    ownedTools: { screwdriver: false },
+    ownedTools: { screwdriver: false, hammer: false },
     currentWeaponId: 'water',
     ammo: { water: MAX_AMMO },
     reloads: { water: MAX_RELOADS },
@@ -3633,10 +3634,12 @@
       guards.push(guard);
     });
 
-    // Already own a screwdriver from the shop? Bring it along instead of
-    // spawning one to go find — one less tool lying around the room.
+    // Already own a screwdriver and/or hammer from the shop? Bring them
+    // along instead of spawning one to go find — fewer tools lying around
+    // the room, or none at all if you own both.
     const haveOwnScrewdriver = !!state.ownedTools.screwdriver;
-    const toolKinds = haveOwnScrewdriver ? ['hammer'] : ['screwdriver', 'hammer'];
+    const haveOwnHammer = !!state.ownedTools.hammer;
+    const toolKinds = ['screwdriver', 'hammer'].filter((kind) => !state.ownedTools[kind]);
     const tools = toolKinds.map((kind) => {
       const spot = randomOpenSpotNear(cx, cz, BANK_ROOM_W / 2 - 3, 1);
       const mesh = makeToolMesh(kind);
@@ -3647,17 +3650,21 @@
 
     state.bankHeist = {
       bank, guards, tools,
-      hasScrewdriver: haveOwnScrewdriver, hasHammer: false,
-      cracking: false, crackProgress: 0,
+      hasScrewdriver: haveOwnScrewdriver, hasHammer: haveOwnHammer,
+      cracking: haveOwnScrewdriver && haveOwnHammer,
+      crackProgress: 0,
       vaultCracked: false, stolenAmount: 0,
       escapeTimer: 0, policeArrived: false,
     };
 
     showOverlay($('bank-heist-hud'));
     updateBankHeistHUD();
-    toast(haveOwnScrewdriver
-      ? '🏦 You snuck inside with your own screwdriver! Find the hammer 🔨 — watch out for guards!'
-      : '🏦 You snuck inside! Find the screwdriver 🪛 and hammer 🔨 — watch out for guards!', 3400);
+    let entryMsg;
+    if (haveOwnScrewdriver && haveOwnHammer) entryMsg = "🏦 You snuck inside with your own tools — it's already cracking! Watch out for guards!";
+    else if (haveOwnScrewdriver) entryMsg = '🏦 You snuck inside with your own screwdriver! Find the hammer 🔨 — watch out for guards!';
+    else if (haveOwnHammer) entryMsg = '🏦 You snuck inside with your own hammer! Find the screwdriver 🪛 — watch out for guards!';
+    else entryMsg = '🏦 You snuck inside! Find the screwdriver 🪛 and hammer 🔨 — watch out for guards!';
+    toast(entryMsg, 3400);
   }
 
   function updateBankHeist(dt) {
