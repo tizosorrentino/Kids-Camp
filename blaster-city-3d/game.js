@@ -28,6 +28,7 @@
         currentWeaponId: state.currentWeaponId,
         ammo: state.ammo,
         reloads: state.reloads,
+        ownedTools: state.ownedTools,
         character: state.character,
         hasBaseAccess: state.hasBaseAccess,
         apartmentsOwned: apartments.map((a) => a.owned),
@@ -46,6 +47,13 @@
     { id: 'confetti', name: 'Confetti Cannon', icon: '🎉', price: 350, damage: 34, rate: 2.4, range: 26, color: 0xf472b6, splash: 3 },
     { id: 'bubble', name: 'Bubble Bazooka', icon: '🫧', price: 700, damage: 55, rate: 1.3, range: 34, color: 0xa78bfa, splash: 5 },
     { id: 'mega', name: 'Mega Soaker 9000', icon: '🚀', price: 1500, damage: 100, rate: 1.6, range: 40, color: 0xfb923c, splash: 6 },
+  ];
+
+  // Non-weapon items — right now just the screwdriver used to crack a bank
+  // vault (see startBankHeist): owning one means you bring your own instead
+  // of having to find one lying around the vault room every time.
+  const TOOLS = [
+    { id: 'screwdriver', name: 'Screwdriver', icon: '🪛', price: 80, desc: 'Skip hunting for one during a bank heist — you already have it on you.' },
   ];
   const MAX_AMMO = 20; // fists don't need ammo — everything else has to be refilled at the shop
   const MAX_RELOADS = 20; // an empty mag auto-reloads on its own up to this many times before a shop trip is required
@@ -73,6 +81,7 @@
   const state = {
     money: 300,
     ownedWeapons: ['fists', 'water'],
+    ownedTools: { screwdriver: false },
     currentWeaponId: 'water',
     ammo: { water: MAX_AMMO },
     reloads: { water: MAX_RELOADS },
@@ -128,6 +137,7 @@
       if (state.ammo[id] === undefined) state.ammo[id] = MAX_AMMO;
       if (state.reloads[id] === undefined) state.reloads[id] = MAX_RELOADS;
     });
+    if (saved.ownedTools && typeof saved.ownedTools === 'object') Object.assign(state.ownedTools, saved.ownedTools);
     if (saved.character) Object.assign(state.character, saved.character);
     if (Array.isArray(saved.apartmentsOwned)) pendingApartmentsOwned = saved.apartmentsOwned;
   }
@@ -2490,6 +2500,44 @@
       }
       list.appendChild(row);
     });
+
+    TOOLS.forEach((t) => {
+      const owned = !!state.ownedTools[t.id];
+      const row = document.createElement('div');
+      row.className = 'item-row';
+      row.innerHTML = `
+        <div class="item-icon">${t.icon}</div>
+        <div class="item-info">
+          <div class="item-name">${t.name}</div>
+          <div class="item-desc">${t.desc} &middot; $${t.price}</div>
+        </div>
+        <div class="item-action"></div>
+      `;
+      const actionDiv = row.querySelector('.item-action');
+      if (owned) {
+        const btn = document.createElement('button');
+        btn.textContent = 'Owned';
+        btn.className = 'equipped';
+        btn.disabled = true;
+        actionDiv.appendChild(btn);
+      } else {
+        const btn = document.createElement('button');
+        btn.textContent = `Buy $${t.price}`;
+        btn.className = 'buy';
+        btn.disabled = state.money < t.price;
+        btn.addEventListener('click', () => {
+          if (state.money < t.price) return;
+          state.money -= t.price;
+          state.ownedTools[t.id] = true;
+          updateHUDMoney();
+          writeSave();
+          toast(`${t.icon} Bought a ${t.name}!`, 1600);
+          renderShop();
+        });
+        actionDiv.appendChild(btn);
+      }
+      list.appendChild(row);
+    });
   }
 
   function openShop() {
@@ -3585,7 +3633,11 @@
       guards.push(guard);
     });
 
-    const tools = ['screwdriver', 'hammer'].map((kind) => {
+    // Already own a screwdriver from the shop? Bring it along instead of
+    // spawning one to go find — one less tool lying around the room.
+    const haveOwnScrewdriver = !!state.ownedTools.screwdriver;
+    const toolKinds = haveOwnScrewdriver ? ['hammer'] : ['screwdriver', 'hammer'];
+    const tools = toolKinds.map((kind) => {
       const spot = randomOpenSpotNear(cx, cz, BANK_ROOM_W / 2 - 3, 1);
       const mesh = makeToolMesh(kind);
       mesh.position.set(spot.x, 0, spot.z);
@@ -3595,7 +3647,7 @@
 
     state.bankHeist = {
       bank, guards, tools,
-      hasScrewdriver: false, hasHammer: false,
+      hasScrewdriver: haveOwnScrewdriver, hasHammer: false,
       cracking: false, crackProgress: 0,
       vaultCracked: false, stolenAmount: 0,
       escapeTimer: 0, policeArrived: false,
@@ -3603,7 +3655,9 @@
 
     showOverlay($('bank-heist-hud'));
     updateBankHeistHUD();
-    toast('🏦 You snuck inside! Find the screwdriver 🪛 and hammer 🔨 — watch out for guards!', 3400);
+    toast(haveOwnScrewdriver
+      ? '🏦 You snuck inside with your own screwdriver! Find the hammer 🔨 — watch out for guards!'
+      : '🏦 You snuck inside! Find the screwdriver 🪛 and hammer 🔨 — watch out for guards!', 3400);
   }
 
   function updateBankHeist(dt) {
@@ -4535,7 +4589,7 @@
     get missionRobbers() { return missionRobbers; }, get missionCashPile() { return missionCashPile; },
     enterApartment, exitApartmentInterior, toggleTV,
     get APARTMENT_INTERIOR() { return APARTMENT_INTERIOR; },
-    CONTACTS, WEAPONS, VEHICLE_WEAPONS,
+    CONTACTS, WEAPONS, VEHICLE_WEAPONS, TOOLS,
   };
 
 })();
