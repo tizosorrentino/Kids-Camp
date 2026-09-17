@@ -1070,8 +1070,8 @@
 
   function buildTrafficControls() {
     const offset = ROAD_WIDTH / 2 + 1.4; // tucks the pole onto the sidewalk corner, clear of the road
-    for (let i = 1; i < CITY_BLOCKS; i++) {
-      for (let j = 1; j < CITY_BLOCKS; j++) {
+    for (let i = 0; i <= CITY_BLOCKS; i++) {
+      for (let j = 0; j <= CITY_BLOCKS; j++) {
         const ix = -WORLD_HALF + i * BLOCK_SIZE;
         const jz = -WORLD_HALF + j * BLOCK_SIZE;
         const cx = ix + offset, cz = jz + offset;
