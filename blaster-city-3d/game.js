@@ -656,6 +656,7 @@
   let player, playerMesh, playerAimMarker;
   let buildingBoxes = []; // {minX,maxX,minZ,maxZ}
   let vehicles = [];
+  let trafficControls = []; // {x, z, kind:'light'|'stop', phase, timer, lenses}
   let robots = [];
   let pedestrians = [];
   let coins = [];
@@ -1023,6 +1024,109 @@
       addFloatingSign(0, 9.6, 0, '💦 BLASTER SHOP');
       buildingBoxes.push(boxOf(0, 0, 18, 18, 8));
     }
+
+    buildTrafficControls();
+  }
+
+  // ------------------------------------------------------------
+  // Traffic lights + stop signs at the city's interior intersections
+  // (skipping the outermost ring, which feels more like open perimeter
+  // road than a real crossing) — alternating between the two so the grid
+  // reads as a real mix of controlled intersections, not identical copies.
+  // NPC traffic (see updateOtherVehicles) actually obeys these; the player
+  // is free to drive through either.
+  // ------------------------------------------------------------
+  function makeTrafficLightMesh() {
+    const group = new THREE.Group();
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 3.6, 8), new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.6 }));
+    pole.position.y = 1.8;
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.1, 0.4), new THREE.MeshStandardMaterial({ color: 0x18181b }));
+    housing.position.y = 3.7;
+    group.add(pole, housing);
+    const lensGeo = new THREE.SphereGeometry(0.13, 10, 10);
+    const redMat = new THREE.MeshStandardMaterial({ color: 0x450a0a, emissive: 0xef4444, emissiveIntensity: 0.1 });
+    const yellowMat = new THREE.MeshStandardMaterial({ color: 0x451a03, emissive: 0xfacc15, emissiveIntensity: 0.1 });
+    const greenMat = new THREE.MeshStandardMaterial({ color: 0x052e16, emissive: 0x22c55e, emissiveIntensity: 0.1 });
+    const red = new THREE.Mesh(lensGeo, redMat); red.position.set(0, 4.1, 0.22);
+    const yellow = new THREE.Mesh(lensGeo, yellowMat); yellow.position.set(0, 3.7, 0.22);
+    const green = new THREE.Mesh(lensGeo, greenMat); green.position.set(0, 3.3, 0.22);
+    group.add(red, yellow, green);
+    group.traverse((c) => { c.castShadow = true; });
+    return { group, lenses: { red: redMat, yellow: yellowMat, green: greenMat } };
+  }
+
+  function makeStopSignMesh() {
+    const group = new THREE.Group();
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 2.6, 8), new THREE.MeshStandardMaterial({ color: 0x9ca3af }));
+    pole.position.y = 1.3;
+    const sign = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.06, 6), new THREE.MeshStandardMaterial({ color: 0xdc2626 }));
+    sign.rotation.x = Math.PI / 2;
+    sign.rotation.z = Math.PI / 6; // hexagon flat-side-up instead of point-up
+    sign.position.y = 2.5;
+    group.add(pole, sign);
+    group.traverse((c) => { c.castShadow = true; });
+    return group;
+  }
+
+  function buildTrafficControls() {
+    const offset = ROAD_WIDTH / 2 + 1.4; // tucks the pole onto the sidewalk corner, clear of the road
+    for (let i = 1; i < CITY_BLOCKS; i++) {
+      for (let j = 1; j < CITY_BLOCKS; j++) {
+        const ix = -WORLD_HALF + i * BLOCK_SIZE;
+        const jz = -WORLD_HALF + j * BLOCK_SIZE;
+        const cx = ix + offset, cz = jz + offset;
+        if ((i + j) % 2 === 0) {
+          const { group, lenses } = makeTrafficLightMesh();
+          group.position.set(cx, 0, cz);
+          scene.add(group);
+          trafficControls.push({ x: ix, z: jz, kind: 'light', phase: 'v-green', timer: Math.random() * 6, lenses });
+        } else {
+          const mesh = makeStopSignMesh();
+          mesh.position.set(cx, 0, cz);
+          scene.add(mesh);
+          trafficControls.push({ x: ix, z: jz, kind: 'stop' });
+        }
+      }
+    }
+  }
+
+  const LIGHT_PHASE_DURATIONS = { 'v-green': 6, 'v-yellow': 1.5, 'h-green': 6, 'h-yellow': 1.5 };
+  const LIGHT_PHASE_NEXT = { 'v-green': 'v-yellow', 'v-yellow': 'h-green', 'h-green': 'h-yellow', 'h-yellow': 'v-green' };
+
+  function updateTrafficLights(dt) {
+    trafficControls.forEach((tc) => {
+      if (tc.kind !== 'light') return;
+      tc.timer += dt;
+      if (tc.timer >= LIGHT_PHASE_DURATIONS[tc.phase]) {
+        tc.timer = 0;
+        tc.phase = LIGHT_PHASE_NEXT[tc.phase];
+      }
+      const active = tc.phase === 'v-green' ? 'green' : tc.phase === 'v-yellow' ? 'yellow' : tc.phase === 'h-green' ? 'red' : 'red';
+      ['red', 'yellow', 'green'].forEach((c) => { tc.lenses[c].emissiveIntensity = c === active ? 1.5 : 0.1; });
+    });
+  }
+
+  // Which traffic control (if any) governs the intersection nearest (x,z) —
+  // cheap enough to call once per NPC vehicle per frame given how few
+  // controlled intersections there are.
+  function trafficControlAt(x, z) {
+    const halfRoad = ROAD_WIDTH / 2;
+    for (const tc of trafficControls) {
+      if (Math.abs(tc.x - x) < halfRoad + 1 && Math.abs(tc.z - z) < halfRoad + 1) return tc;
+    }
+    return null;
+  }
+
+  // A vehicle heading ~0 or ~PI is moving along a vertical (north-south)
+  // road; ~PI/2 or ~-PI/2 means it's on a horizontal (east-west) one — same
+  // convention as v.heading everywhere else (sin = X movement, cos = Z).
+  function approachAxisFromHeading(heading) {
+    return Math.abs(Math.cos(heading)) > Math.abs(Math.sin(heading)) ? 'v' : 'h';
+  }
+
+  function trafficLightColorForAxis(tc, axis) {
+    if (axis === 'v') return tc.phase === 'v-green' ? 'green' : tc.phase === 'v-yellow' ? 'yellow' : 'red';
+    return tc.phase === 'h-green' ? 'green' : tc.phase === 'h-yellow' ? 'yellow' : 'red';
   }
 
   function boxOf(cx, cz, w, d, h) {
@@ -4172,6 +4276,16 @@
       const atIntersection = distToNearestRoadLine(v.x) < halfRoad && distToNearestRoadLine(v.z) < halfRoad;
       if (atIntersection) {
         if (!v.decidedAtIntersection) {
+          const tc = trafficControlAt(v.x, v.z);
+          if (tc && tc.kind === 'light') {
+            const color = trafficLightColorForAxis(tc, approachAxisFromHeading(v.heading));
+            if (color !== 'green') return; // stopped at a red or yellow light
+          } else if (tc && tc.kind === 'stop') {
+            const now = performance.now() / 1000;
+            if (!v.stopSignClearAt) v.stopSignClearAt = now + 1.2 + Math.random() * 0.6;
+            if (now < v.stopSignClearAt) return; // still waiting out the stop
+          }
+          v.stopSignClearAt = null;
           v.decidedAtIntersection = true;
           const choice = Math.random();
           if (choice < 0.775) v.heading += choice < 0.55 ? 0 : Math.PI / 2;
@@ -4180,6 +4294,7 @@
         }
       } else {
         v.decidedAtIntersection = false;
+        v.stopSignClearAt = null;
       }
 
       const speed = 5;
@@ -4541,6 +4656,7 @@
     if (state.bankHeist) updateBankHeist(dt);
     if (state.apartmentInterior) updateApartmentInterior(dt);
 
+    updateTrafficLights(dt);
     updateOtherVehicles(dt);
     updatePoliceVehicles(dt);
     updateMissionRobbers(dt);
@@ -4583,6 +4699,7 @@
     get militaryBaseCenter() { return militaryBaseCenter; },
     get militaryGateBox() { return militaryGateBox; },
     get buildingBoxes() { return buildingBoxes; },
+    get trafficControls() { return trafficControls; },
     get BANK_INTERIOR() { return BANK_INTERIOR; },
     isInOcean, get oceanStartZ() { return oceanStartZ; }, get oceanFarZ() { return oceanFarZ; },
     startRide, endRide,
