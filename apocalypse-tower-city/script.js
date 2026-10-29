@@ -14,6 +14,8 @@
   const MAX_CRATES = 7;
   const PLAYER_MAX_HP = 100;
   const FOOT_SPEED = 40;
+  const TURTLE_SPEED = 22; // how fast the car crawls on its own after a zombie passes a cone
+  const CONE_STOP = 24; // the car stops this far before the cone
   const BEST_KEY = 'apocalypseTowerCityBestLevel';
   const reduceMotion = window.matchMedia &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -209,7 +211,7 @@
       earned: 0,
       endT: 0,
       far, near, props, cones,
-      autoDrive: false
+      autoTarget: null
     };
     // A first wave that already crawled out of the porta potty.
     const startWave = 8 + 3 * L;
@@ -497,27 +499,39 @@
   }
 
   // True when a ground zombie is between you and the closest cone ahead of you.
-  function zombiePassedCone() {
+  function nextCone() {
     const right = towerRight();
-    const cone = g.cones.find(x => x > right);
-    if (cone === undefined) return false;
-    return g.zombies.some(z => !z.dead && z.emerge <= 0 && z.type !== 'flyer' && z.x - z.w / 2 < cone);
+    return g.cones.find(x => x > right + CONE_STOP + 10);
+  }
+
+  // True only on the frame a ground zombie walks past the cone.
+  function zombiePassedCone(cone) {
+    return g.zombies.some(z => !z.dead && z.type !== 'flyer' && z.lastX !== undefined &&
+      z.lastX - z.w / 2 >= cone && z.x - z.w / 2 < cone);
   }
 
   function updateTower(dt) {
     const car = CARS[build.car];
     const speed = g.hasCar ? car.speed : FOOT_SPEED;
     let dir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
-    const auto = zombiePassedCone();
-    if (auto && !g.autoDrive) addText(towerCX(), towerTopY() - 80, 'Zombie passed the cone!', '#ff9f1c');
-    g.autoDrive = auto;
-    if (dir === 0 && auto) dir = 1;
+    // A zombie passing the next cone makes the car crawl up to that cone, then stop.
+    if (g.autoTarget === null) {
+      const cone = nextCone();
+      if (cone !== undefined && zombiePassedCone(cone)) {
+        g.autoTarget = cone;
+        addText(towerCX(), towerTopY() - 80, 'Zombie passed the cone! 🐢', '#ff9f1c');
+      }
+    }
+    if (g.autoTarget !== null && towerRight() >= g.autoTarget - CONE_STOP) g.autoTarget = null;
+    const auto = dir === 0 && g.autoTarget !== null;
+    if (auto) dir = 1;
     if (dir > 0) {
       // Zombies in the way stop you. The car can't run them over — shoot them!
       if (blockingZombies().length) dir = 0;
     }
-    g.towerX = clamp(g.towerX + dir * speed * dt, 20, g.sourceX - 230 - CAR_W);
-    g.wheel += dir * speed * dt / 16;
+    const v = auto ? TURTLE_SPEED : speed;
+    g.towerX = clamp(g.towerX + dir * v * dt, 20, g.sourceX - 230 - CAR_W);
+    g.wheel += dir * v * dt / 16;
   }
 
   function updateSpawning(dt) {
@@ -588,6 +602,7 @@
     const active = mode === 'play';
     for (const z of g.zombies) {
       if (z.dead) continue;
+      z.lastX = z.x;
       z.phase += dt * (z.speed / 10);
       if (z.hitT > 0) z.hitT -= dt;
       if (z.emerge > 0) { z.emerge -= dt; continue; }
@@ -817,12 +832,12 @@
       ctx.fillStyle = '#8a9aa8';
       ctx.fillRect(x - 12, GROUND - 22, 24, 4);
     }
-    const nextCone = g.cones.find(c => c > towerRight());
+    const glowCone = g.autoTarget !== null ? g.autoTarget : nextCone();
     for (const c of g.cones) {
       const x = c - camX;
       if (x < -40 || x > W + 40) continue;
-      if (c === nextCone && mode === 'play') {
-        ctx.fillStyle = g.autoDrive ? 'rgba(255,90,90,0.35)' : 'rgba(255,159,28,0.25)';
+      if (c === glowCone && mode === 'play') {
+        ctx.fillStyle = g.autoTarget !== null ? 'rgba(255,90,90,0.35)' : 'rgba(255,159,28,0.25)';
         ctx.beginPath();
         ctx.ellipse(x, GROUND - 2, 26, 8, 0, 0, Math.PI * 2);
         ctx.fill();

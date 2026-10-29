@@ -237,7 +237,7 @@ button {
 }
 
 #touch-controls {
-  display: none;
+  display: flex;
   width: 100%;
   justify-content: space-between;
   align-items: center;
@@ -259,11 +259,6 @@ button {
   -webkit-user-select: none;
 }
 
-@media (pointer: coarse) {
-  #touch-controls {
-    display: flex;
-  }
-}
 
 @media (max-width: 720px) {
   .overlay.side {
