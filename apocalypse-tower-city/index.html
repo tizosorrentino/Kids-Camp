@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apocalypse Tower City</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧟</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+  <h1 id="game-title">🧟 Apocalypse Tower City 🏙️</h1>
+
+  <div id="board-wrap">
+    <canvas id="game" width="960" height="540"></canvas>
+
+    <!-- Start screen -->
+    <div id="start-overlay" class="overlay">
+      <div class="overlay-card">
+        <h2>The Zombie Apocalypse Is Here!</h2>
+        <p>Zombies keep pouring out of a stinky <strong>porta potty</strong> 🚽.
+           Drive your tower down the long road. When zombies block your way, you
+           can't run them over &mdash; you have to shoot them! Then blast that
+           porta potty to pieces to win the level.</p>
+        <p>You start with one wooden crate, one old car, and the gun in your
+           hands. Shoot zombies to earn coins 🪙, then buy more crates,
+           stronger crates, blasters, better cars, and new guns &mdash; pistols,
+           MGs, shotguns, spamming guns, and snipers.
+           Every level the zombies &mdash; and the porta potty &mdash; get tougher!</p>
+        <p>Zombies smash your crates first, then your car, then <strong>you</strong>.
+           If they get you, you go back to level 1 &mdash; but you keep everything you bought!</p>
+        <p class="controls-hint">Drive with <strong>A / D</strong> or the <strong>arrow keys</strong>.
+           Aim with the <strong>mouse</strong> and <strong>click</strong> (or hold Space) to shoot.
+           Press <strong>P</strong> to pause.</p>
+        <p id="best-line" class="small"></p>
+        <div class="button-row">
+          <button id="start-button" class="primary-button" type="button">Start Game</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Build / shop screen -->
+    <div id="build-overlay" class="overlay side hidden">
+      <div class="panel">
+        <h2>🔧 Build Your Tower</h2>
+        <p id="build-level" class="small"></p>
+        <p id="build-coins" class="coins"></p>
+        <p id="build-tip" class="tip"></p>
+        <div id="shop"></div>
+        <button id="go-button" class="primary-button" type="button">Drive Out! 🚗💨</button>
+      </div>
+    </div>
+
+    <!-- Win / lose screen -->
+    <div id="result-overlay" class="overlay hidden">
+      <div class="overlay-card">
+        <h2 id="result-title"></h2>
+        <p id="result-text"></p>
+        <div class="button-row">
+          <button id="next-button" class="primary-button" type="button">Build &amp; Next Level</button>
+          <button id="restart-button" class="secondary-button" type="button">Back to Level 1</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pause screen -->
+    <div id="pause-overlay" class="overlay hidden">
+      <div class="overlay-card">
+        <h2>Paused</h2>
+        <div class="button-row">
+          <button id="resume-button" class="primary-button" type="button">Keep Fighting</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="touch-controls">
+    <button id="left-button" type="button" aria-label="Drive left">◀</button>
+    <span>Tap the screen to shoot</span>
+    <button id="right-button" type="button" aria-label="Drive right">▶</button>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
