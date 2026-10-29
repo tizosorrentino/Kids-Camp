@@ -13,7 +13,7 @@
   const BOX_H = 44;
   const MAX_CRATES = 7;
   const PLAYER_MAX_HP = 100;
-  const FOOT_SPEED = 60;
+  const FOOT_SPEED = 40;
   const BEST_KEY = 'apocalypseTowerCityBestLevel';
   const reduceMotion = window.matchMedia &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -29,12 +29,12 @@
   // Cars from worst to best. Index 0 means "no car".
   const CARS = [
     null,
-    { name: 'Old Jeep', hp: 90, speed: 90, cost: 40, color: '#6b8e4e', wheels: 2 },
-    { name: 'Pickup Truck', hp: 150, speed: 110, cost: 100, color: '#c0392b', wheels: 2 },
-    { name: 'Monster Truck', hp: 230, speed: 130, cost: 220, color: '#e67e22', wheels: 2, big: true },
-    { name: 'Armored Truck', hp: 340, speed: 145, cost: 380, color: '#4b5563', wheels: 3, spikes: true },
-    { name: 'Battle Tank', hp: 480, speed: 155, cost: 600, color: '#3f6212', tank: true, spikes: true },
-    { name: 'Hover Tank', hp: 650, speed: 180, cost: 900, color: '#6d28d9', hover: true, spikes: true }
+    { name: 'Old Jeep', hp: 90, speed: 60, cost: 40, color: '#6b8e4e', wheels: 2 },
+    { name: 'Pickup Truck', hp: 150, speed: 68, cost: 100, color: '#c0392b', wheels: 2 },
+    { name: 'Monster Truck', hp: 230, speed: 76, cost: 220, color: '#e67e22', wheels: 2, big: true },
+    { name: 'Armored Truck', hp: 340, speed: 84, cost: 380, color: '#4b5563', wheels: 3, spikes: true },
+    { name: 'Battle Tank', hp: 480, speed: 92, cost: 600, color: '#3f6212', tank: true, spikes: true },
+    { name: 'Hover Tank', hp: 650, speed: 100, cost: 900, color: '#6d28d9', hover: true, spikes: true }
   ];
 
   // Guns come in five kinds. In each kind, the more a gun costs, the more damage it does.
@@ -167,8 +167,12 @@
       near.push({ x, w, h: 80 + r() * 150, cut: r() });
       x += w + 40 + r() * 120;
     }
-    for (let x = 450; x < sourceX - 200; x += 260 + r() * 380) {
-      props.push({ x, kind: 1 + Math.floor(r() * 2), c: r() });
+    // Traffic cones are tripwires: a zombie walking past the cone closest to you
+    // makes your car drive out to meet it.
+    const cones = [];
+    for (let x = 520; x < sourceX - 300; x += 340 + r() * 160) {
+      cones.push(x);
+      if (r() < 0.5) props.push({ x: x + 120 + r() * 80, kind: 1, c: r() });
     }
     const car = CARS[build.car];
     g = {
@@ -204,7 +208,8 @@
       kills: 0,
       earned: 0,
       endT: 0,
-      far, near, props
+      far, near, props, cones,
+      autoDrive: false
     };
     // A first wave that already crawled out of the porta potty.
     const startWave = 8 + 3 * L;
@@ -249,7 +254,7 @@
     const L = level;
     const hpM = 1 + 0.3 * (L - 1);
     const spM = Math.min(1.9, 1 + 0.07 * (L - 1));
-    const dM = 1 + 0.15 * (L - 1);
+    const dM = 1 + 0.3 * (L - 1); // zombies hit harder every level
     const z = {
       type, x,
       y: type === 'flyer' ? rand(150, 260) : GROUND,
@@ -491,10 +496,22 @@
       (z.state === 'attack' || z.type === 'spitter') && z.x - z.w / 2 <= right + z.jitter + 2);
   }
 
+  // True when a ground zombie is between you and the closest cone ahead of you.
+  function zombiePassedCone() {
+    const right = towerRight();
+    const cone = g.cones.find(x => x > right);
+    if (cone === undefined) return false;
+    return g.zombies.some(z => !z.dead && z.emerge <= 0 && z.type !== 'flyer' && z.x - z.w / 2 < cone);
+  }
+
   function updateTower(dt) {
     const car = CARS[build.car];
     const speed = g.hasCar ? car.speed : FOOT_SPEED;
     let dir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+    const auto = zombiePassedCone();
+    if (auto && !g.autoDrive) addText(towerCX(), towerTopY() - 80, 'Zombie passed the cone!', '#ff9f1c');
+    g.autoDrive = auto;
+    if (dir === 0 && auto) dir = 1;
     if (dir > 0) {
       // Zombies in the way stop you. The car can't run them over — shoot them!
       if (blockingZombies().length) dir = 0;
@@ -646,7 +663,7 @@
     const y0 = z.y - z.h + 12;
     const tx = towerCX();
     const ty = rand(towerTopY() - 30, GROUND - 20);
-    g.goo.push({ x: x0, y: y0, vx: (tx - x0) / t, vy: (ty - y0 - 0.5 * 600 * t * t) / t, dmg: 7 * (1 + 0.15 * (level - 1)) });
+    g.goo.push({ x: x0, y: y0, vx: (tx - x0) / t, vy: (ty - y0 - 0.5 * 600 * t * t) / t, dmg: 7 * (1 + 0.3 * (level - 1)) });
   }
 
   function updateGoo(dt) {
@@ -796,18 +813,31 @@
     for (const p of g.props) {
       const x = p.x - camX;
       if (x < -120 || x > W + 120) continue;
-      if (p.kind === 1) {
-        block(x - 12, GROUND - 32, 24, 32, '#b33a1f');
-        ctx.fillStyle = '#e8d44d';
-        ctx.fillRect(x - 12, GROUND - 22, 24, 4);
-      } else {
-        ctx.fillStyle = '#ff7a1a';
+      block(x - 12, GROUND - 32, 24, 32, '#4a5a6a');
+      ctx.fillStyle = '#8a9aa8';
+      ctx.fillRect(x - 12, GROUND - 22, 24, 4);
+    }
+    const nextCone = g.cones.find(c => c > towerRight());
+    for (const c of g.cones) {
+      const x = c - camX;
+      if (x < -40 || x > W + 40) continue;
+      if (c === nextCone && mode === 'play') {
+        ctx.fillStyle = g.autoDrive ? 'rgba(255,90,90,0.35)' : 'rgba(255,159,28,0.25)';
         ctx.beginPath();
-        ctx.moveTo(x - 10, GROUND);
-        ctx.lineTo(x, GROUND - 26);
-        ctx.lineTo(x + 10, GROUND);
+        ctx.ellipse(x, GROUND - 2, 26, 8, 0, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.fillStyle = '#ff7a1a';
+      ctx.beginPath();
+      ctx.moveTo(x - 13, GROUND);
+      ctx.lineTo(x - 3, GROUND - 32);
+      ctx.lineTo(x + 3, GROUND - 32);
+      ctx.lineTo(x + 13, GROUND);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x - 7, GROUND - 18, 14, 5);
+      ctx.fillStyle = '#ff7a1a';
+      ctx.fillRect(x - 16, GROUND - 3, 32, 3);
     }
   }
 
@@ -1321,7 +1351,7 @@
     buildLevelEl.textContent = `Next up: Level ${level}  •  Porta potty health: ${pottyHp(level)}`;
     buildCoinsEl.textContent = `🪙 ${coins} coins`;
     buildTipEl.textContent = NEW_ZOMBIE_TIPS[level] ||
-      (level % 3 === 0 ? 'A BOSS zombie comes out this level!' : 'The zombies are even tougher now!');
+      (level % 3 === 0 ? 'A BOSS zombie comes out this level!' : 'The zombies are tougher and hit harder now!');
     shopEl.innerHTML = '';
     const tabs = document.createElement('div');
     tabs.className = 'shop-tabs';
