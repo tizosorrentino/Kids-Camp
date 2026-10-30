@@ -425,3 +425,98 @@ button {
   line-height: 1;
   z-index: 5;
 }
+
+.levels-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#levels-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  margin-top: 6px;
+}
+
+.level-cell {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 2px solid #000;
+  font-weight: bold;
+  font-size: 0.85rem;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.level-cell.done {
+  background: var(--toxic-dark);
+  color: #fff;
+}
+
+.level-cell.done::after {
+  content: '✔';
+  font-size: 0.6em;
+  margin-left: 1px;
+}
+
+.level-cell.open {
+  background: var(--toxic);
+  color: #10200a;
+}
+
+.level-cell.locked {
+  background: #2b2140;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.level-cell.current {
+  outline: 3px solid #fde047;
+  outline-offset: 1px;
+  box-shadow: 0 0 12px rgba(253, 224, 71, 0.8);
+}
+
+.level-cell.unlocking {
+  background: #2b2140;
+  animation: lock-shake 0.9s ease-in-out;
+}
+
+.level-cell.pop {
+  animation: unlock-pop 0.5s ease-out;
+}
+
+@keyframes lock-shake {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-14deg); }
+  40% { transform: rotate(14deg); }
+  60% { transform: rotate(-10deg); }
+  80% { transform: rotate(10deg); }
+}
+
+@keyframes unlock-pop {
+  0% { transform: scale(0.3); }
+  60% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+@media (max-width: 720px) {
+  #levels-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  /* On phones the level chart takes the whole screen. */
+  #levels-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: var(--night);
+    padding-block: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
+}

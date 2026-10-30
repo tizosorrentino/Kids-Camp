@@ -69,8 +69,20 @@
         <h2 id="result-title"></h2>
         <p id="result-text"></p>
         <div class="button-row">
-          <button id="next-button" class="primary-button" type="button">Build &amp; Next Level</button>
           <button id="restart-button" class="secondary-button" type="button">Back to Level 1</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Level chart -->
+    <div id="levels-overlay" class="overlay hidden">
+      <div class="overlay-card levels-card">
+        <h2 id="levels-title">Levels</h2>
+        <p id="levels-text" class="small"></p>
+        <div id="levels-grid"></div>
+        <div class="button-row">
+          <button id="levels-next" class="primary-button" type="button">Build &amp; Next Level</button>
+          <button id="levels-back" class="secondary-button" type="button">Back</button>
         </div>
       </div>
     </div>
@@ -82,6 +94,7 @@
         <div class="button-row">
           <button id="resume-button" class="primary-button" type="button">▶ Resume</button>
           <button id="pause-shop-button" class="primary-button" type="button">🔧 Change My Stuff</button>
+          <button id="levels-button" class="primary-button" type="button">🗺️ Levels</button>
           <button id="home-button" class="secondary-button" type="button" aria-label="Home">🏠 Home</button>
         </div>
         <p class="small">Change My Stuff opens the shop and puts you right back where you were.</p>

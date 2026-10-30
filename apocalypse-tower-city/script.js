@@ -16,6 +16,7 @@
   const COIN_SCALE = 100;
   const ZOMBIE_COIN_SCALE = 50;
   const fmt = n => Math.round(n).toLocaleString('en-US');
+  const MAX_LEVEL = 200;
   const TURTLE_SPEED = 30; // the car crawls on its own once a zombie passes the first cone
   const BEST_KEY = 'apocalypseTowerCityBestLevel';
   const reduceMotion = window.matchMedia &&
@@ -102,7 +103,12 @@
   const stuffEl = document.getElementById('stuff');
   const resultTitle = document.getElementById('result-title');
   const resultText = document.getElementById('result-text');
-  const nextButton = document.getElementById('next-button');
+  const levelsOverlay = document.getElementById('levels-overlay');
+  const levelsGrid = document.getElementById('levels-grid');
+  const levelsTitle = document.getElementById('levels-title');
+  const levelsText = document.getElementById('levels-text');
+  const levelsNext = document.getElementById('levels-next');
+  const levelsBack = document.getElementById('levels-back');
   const restartButton = document.getElementById('restart-button');
   const bestLine = document.getElementById('best-line');
   const pauseButton = document.getElementById('pause-button');
@@ -175,7 +181,7 @@
 
   function newLevel() {
     const L = level;
-    const sourceX = 3200 + L * 250;
+    const sourceX = 3200 + Math.min(L, 20) * 250; // roads stop getting longer after level 20
     const r = mulberry32(L * 9973 + 7);
     const far = [];
     const near = [];
@@ -231,7 +237,7 @@
       rolling: false
     };
     // A first wave that already crawled out of the porta potty.
-    const startWave = 8 + 3 * L;
+    const startWave = Math.min(8 + 3 * L, 60);
     for (let i = 0; i < startWave; i++) {
       const x = 750 + (sourceX - 900) * (i / startWave) + rand(-40, 40);
       spawnZombie(pickType(L), x, 0);
@@ -313,7 +319,7 @@
 
   function spawnFromPotty() {
     const L = level;
-    if (g.zombies.length >= 16 + 3 * L) return;
+    if (g.zombies.length >= Math.min(16 + 3 * L, 80)) return;
     spawnZombie(pickType(L), g.sourceX - 30, 0.5);
     g.doorT = 0.6;
   }
@@ -459,20 +465,84 @@
   function finishWin() {
     const bonus = (40 + 20 * level) * COIN_SCALE;
     coins += bonus;
+    const newUnlock = level > best && level < MAX_LEVEL ? level + 1 : null;
     best = Math.max(best, level);
     saveBest(best);
     // Whatever survived comes with you. Smashed stuff is gone for good.
     const lost = build.stack.length - g.stack.length;
     build.stack = g.stack.map(p => p.type === 'car' ? { type: 'car', c: p.c } : { type: 'crate', m: p.m, blaster: p.blaster });
     mode = 'won';
-    resultTitle.textContent = `Level ${level} Cleared! 🚽💥`;
     let text = `You blew up the porta potty and blasted ${g.kills} zombies. ` +
       `You earned ${fmt(g.earned)} coins plus a ${fmt(bonus)} coin bonus!`;
     if (lost > 0) text += ` The zombies smashed ${lost} part${lost > 1 ? 's' : ''} of your tower. Buy new ones in the shop.`;
-    resultText.textContent = text;
-    nextButton.classList.remove('hidden');
-    restartButton.classList.add('hidden');
-    resultOverlay.classList.remove('hidden');
+    // Show the level chart, with the next level unlocking.
+    const allDone = level >= MAX_LEVEL;
+    showLevels('win', {
+      title: allDone ? 'You beat all 200 levels! 🏆' : `Level ${level} Cleared! 🚽💥`,
+      text,
+      current: allDone ? level : level + 1,
+      unlock: newUnlock
+    });
+  }
+
+  // ---------- Level chart ----------
+  let levelsFrom = null; // 'pause' or 'win'
+  const unlockedMax = () => Math.min(MAX_LEVEL, best + 1);
+
+  function showLevels(from, opts) {
+    levelsFrom = from;
+    levelsTitle.textContent = opts.title;
+    levelsText.textContent = opts.text;
+    levelsNext.classList.toggle('hidden', from !== 'win' || level >= MAX_LEVEL);
+    levelsBack.classList.toggle('hidden', from !== 'pause');
+    pauseOverlay.classList.add('hidden');
+    levelsOverlay.classList.remove('hidden');
+    renderLevels(opts.current, opts.unlock);
+  }
+
+  function renderLevels(current, unlock) {
+    levelsGrid.innerHTML = '';
+    let currentCell = null;
+    for (let n = 1; n <= MAX_LEVEL; n++) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      const open = n <= unlockedMax();
+      const done = n <= best;
+      cell.className = 'level-cell' + (done ? ' done' : open ? ' open' : ' locked') + (n === current ? ' current' : '');
+      cell.disabled = !open;
+      cell.setAttribute('aria-label', `Level ${n}${done ? ', beaten' : open ? '' : ', locked'}${n === current ? ', you are here' : ''}`);
+      if (n === unlock && !reduceMotion) {
+        // Starts locked, then the lock pops open.
+        cell.textContent = '🔒';
+        cell.classList.add('unlocking');
+        setTimeout(() => { cell.textContent = '🔓'; }, 900);
+        setTimeout(() => {
+          cell.textContent = n;
+          cell.classList.remove('unlocking');
+          cell.classList.add('pop');
+        }, 1500);
+      } else {
+        cell.textContent = open ? n : '🔒';
+      }
+      cell.addEventListener('click', () => pickLevel(n));
+      levelsGrid.appendChild(cell);
+      if (n === current) currentCell = cell;
+    }
+    if (currentCell) {
+      requestAnimationFrame(() => {
+        levelsGrid.scrollTop = currentCell.offsetTop - levelsGrid.clientHeight / 2;
+      });
+    }
+  }
+
+  function pickLevel(n) {
+    if (n > unlockedMax()) return;
+    savedGame = null;
+    goButton.textContent = 'Drive Out! 🚗💨';
+    levelsOverlay.classList.add('hidden');
+    pauseOverlay.classList.add('hidden');
+    level = n;
+    showBuild();
   }
 
   function loseGame() {
@@ -484,7 +554,6 @@
       resultTitle.textContent = 'You Got Zombified! 🧟';
       resultText.textContent = `The zombies smashed your crates, wrecked your car, and got you on level ${level}. ` +
         'Back to level 1 you go — but you keep all the stuff you bought and all your coins!';
-      nextButton.classList.add('hidden');
         restartButton.classList.remove('hidden');
       resultOverlay.classList.remove('hidden');
     }, 900);
@@ -1856,7 +1925,18 @@
   document.getElementById('pause-shop-button').addEventListener('click', shopMidLevel);
   document.getElementById('home-button').addEventListener('click', goHome);
   pauseButton.addEventListener('click', () => setPaused(true));
-  nextButton.addEventListener('click', () => { level++; showBuild(); });
+  levelsNext.addEventListener('click', () => { levelsOverlay.classList.add('hidden'); level++; showBuild(); });
+  levelsBack.addEventListener('click', () => {
+    levelsOverlay.classList.add('hidden');
+    pauseOverlay.classList.remove('hidden');
+  });
+  document.getElementById('levels-button').addEventListener('click', () => {
+    showLevels('pause', {
+      title: '🗺️ Levels',
+      text: `You're on level ${level}. Beaten levels have a ✔. Tap any unlocked level to play it.`,
+      current: level
+    });
+  });
   // Dying sends you back to level 1, but you keep everything you bought.
   restartButton.addEventListener('click', () => { level = 1; showBuild(); });
 
