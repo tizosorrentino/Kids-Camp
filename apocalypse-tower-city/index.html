@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apocalypse Tower City</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧟</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+  <h1 id="game-title">🧟 Apocalypse Tower City 🏙️</h1>
+
+  <div id="board-wrap">
+    <canvas id="game" width="960" height="540"></canvas>
+
+    <button id="pause-button" type="button" aria-label="Pause" hidden>❚❚</button>
+
+    <!-- Start screen -->
+    <div id="start-overlay" class="overlay">
+      <div class="overlay-card">
+        <h2>The Zombie Apocalypse Is Here!</h2>
+        <p>Zombies keep pouring out of a stinky <strong>porta potty</strong> 🚽.
+           Your tower rides down the long road. When zombies block your way, you
+           can't run them over &mdash; you have to shoot them! Then blast that
+           porta potty to pieces to win the level.</p>
+        <p>Watch the glowing orange cone! When the first zombie walks past it,
+           your car starts rolling forward by itself, slow as a turtle, and it
+           won't stop until you reach the porta potty.</p>
+        <p>You start with one wooden crate, one old car, and the gun in your
+           hands. Shoot zombies to earn coins 🪙, then buy more crates,
+           stronger crates, all kinds of blasters, better cars, and new guns &mdash; pistols,
+           MGs, shotguns, spamming guns, and snipers.
+           Every level the zombies &mdash; and the porta potty &mdash; get tougher!</p>
+        <p>Zombies smash your crates first, then your car, then <strong>you</strong>.
+           If they get you, you go back to level 1 &mdash; but you keep everything you bought!</p>
+        <p class="controls-hint">Aim with the <strong>mouse</strong> and <strong>click</strong>
+           (or hold Space) to shoot. On a phone or tablet, tap where you want to shoot.
+           Press <strong>⏸</strong> or <strong>P</strong> to pause.</p>
+        <p id="best-line" class="small"></p>
+        <div class="button-row">
+          <button id="continue-button" class="primary-button hidden" type="button">Keep Playing</button>
+          <button id="start-button" class="primary-button" type="button">Start Game</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Build / shop screen -->
+    <div id="build-overlay" class="overlay build hidden">
+      <div class="panel shop-panel">
+        <h2>🔧 Build Your Tower</h2>
+        <p id="build-level" class="small"></p>
+        <p id="build-coins" class="coins"></p>
+        <p id="build-tip" class="tip"></p>
+        <div id="shop"></div>
+        <button id="go-button" class="primary-button" type="button">Drive Out! 🚗💨</button>
+      </div>
+      <div class="panel stuff-panel">
+        <h2>🧰 Your Tower</h2>
+        <p class="small">Double-tap something here or on your tower to sell it (you get back 40%). Hold it and drag to move it.</p>
+        <div id="stuff"></div>
+      </div>
+    </div>
+
+    <!-- Win / lose screen -->
+    <div id="result-overlay" class="overlay hidden">
+      <div class="overlay-card">
+        <h2 id="result-title"></h2>
+        <p id="result-text"></p>
+        <div class="button-row">
+          <button id="restart-button" class="secondary-button" type="button">Back to Level 1</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Level chart -->
+    <div id="levels-overlay" class="overlay hidden">
+      <div class="overlay-card levels-card">
+        <h2 id="levels-title">Levels</h2>
+        <p id="levels-text" class="small"></p>
+        <div id="levels-grid"></div>
+        <div class="button-row">
+          <button id="levels-next" class="primary-button" type="button">Build &amp; Next Level</button>
+          <button id="levels-back" class="secondary-button" type="button">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pause screen -->
+    <div id="pause-overlay" class="overlay hidden">
+      <div class="overlay-card">
+        <h2>Paused</h2>
+        <div class="button-row">
+          <button id="resume-button" class="primary-button" type="button">▶ Resume</button>
+          <button id="pause-shop-button" class="primary-button" type="button">🔧 Change My Stuff</button>
+          <button id="levels-button" class="primary-button" type="button">🗺️ Levels</button>
+          <button id="home-button" class="secondary-button" type="button" aria-label="Home">🏠 Home</button>
+        </div>
+        <p class="small">Change My Stuff opens the shop and puts you right back where you were.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
