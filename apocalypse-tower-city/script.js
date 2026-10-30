@@ -13,9 +13,7 @@
   const BOX_H = 44;
   const MAX_CRATES = 7;
   const PLAYER_MAX_HP = 100;
-  const FOOT_SPEED = 40;
-  const TURTLE_SPEED = 22; // how fast the car crawls on its own after a zombie passes a cone
-  const CONE_STOP = 24; // the car stops this far before the cone
+  const TURTLE_SPEED = 30; // the car crawls on its own once a zombie passes the first cone
   const BEST_KEY = 'apocalypseTowerCityBestLevel';
   const reduceMotion = window.matchMedia &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -31,12 +29,12 @@
   // Cars from worst to best. Index 0 means "no car".
   const CARS = [
     null,
-    { name: 'Old Jeep', hp: 90, speed: 60, cost: 40, color: '#6b8e4e', wheels: 2 },
-    { name: 'Pickup Truck', hp: 150, speed: 68, cost: 100, color: '#c0392b', wheels: 2 },
-    { name: 'Monster Truck', hp: 230, speed: 76, cost: 220, color: '#e67e22', wheels: 2, big: true },
-    { name: 'Armored Truck', hp: 340, speed: 84, cost: 380, color: '#4b5563', wheels: 3, spikes: true },
-    { name: 'Battle Tank', hp: 480, speed: 92, cost: 600, color: '#3f6212', tank: true, spikes: true },
-    { name: 'Hover Tank', hp: 650, speed: 100, cost: 900, color: '#6d28d9', hover: true, spikes: true }
+    { name: 'Old Jeep', hp: 90, cost: 40, color: '#6b8e4e', wheels: 2 },
+    { name: 'Pickup Truck', hp: 150, cost: 100, color: '#c0392b', wheels: 2 },
+    { name: 'Monster Truck', hp: 230, cost: 220, color: '#e67e22', wheels: 2, big: true },
+    { name: 'Armored Truck', hp: 340, cost: 380, color: '#4b5563', wheels: 3, spikes: true },
+    { name: 'Battle Tank', hp: 480, cost: 600, color: '#3f6212', tank: true, spikes: true },
+    { name: 'Hover Tank', hp: 650, cost: 900, color: '#6d28d9', hover: true, spikes: true }
   ];
 
   // Guns come in five kinds. In each kind, the more a gun costs, the more damage it does.
@@ -59,7 +57,16 @@
     { cat: 'Special', name: 'Plasma Cannon', dmg: 120, rate: 0.14, spread: 0.01, shots: 1, cost: 1200, len: 34, color: '#a3e635', plasma: true }
   ];
 
-  const BLASTER_COST = 70;
+  // Blasters sit on your crates and shoot zombies by themselves. One per crate.
+  const BLASTERS = [
+    { name: 'Mini Blaster', icon: '🔫', dmg: 6, rate: 0.6, cost: 70, color: '#22d3ee', len: 18, thick: 7, about: 'Shoots little blue bolts.' },
+    { name: 'Rapid Blaster', icon: '⚡', dmg: 6, rate: 0.18, cost: 160, color: '#facc15', len: 20, thick: 6, about: 'Fires super fast.' },
+    { name: 'Freeze Ray', icon: '❄️', dmg: 8, rate: 0.35, cost: 260, color: '#93c5fd', len: 20, thick: 8, freeze: true, about: 'Freezes zombies so they walk slower.' },
+    { name: 'Laser Turret', icon: '🔦', dmg: 30, rate: 0.5, cost: 380, color: '#38bdf8', len: 24, thick: 6, pierce: 3, kind: 'laser', about: 'Lasers zap through 3 zombies.' },
+    { name: 'Flame Thrower', icon: '🔥', dmg: 5, rate: 0.05, cost: 450, color: '#fb923c', len: 16, thick: 10, range: 240, pierce: 3, kind: 'flame', about: 'Burns zombies that get close.' },
+    { name: 'Rocket Launcher', icon: '🚀', dmg: 70, rate: 1.3, cost: 550, color: '#f97316', len: 24, thick: 11, splash: 90, kind: 'rocket', about: 'Rockets blow up whole groups.' },
+    { name: 'Mega Cannon', icon: '💣', dmg: 160, rate: 1.0, cost: 800, color: '#a855f7', len: 30, thick: 12, pierce: 4, about: 'Giant shots that smash through 4 zombies.' }
+  ];
 
   const TYPES = {
     walker: { hp: 20, speed: 40, w: 26, h: 54, dps: 4, coins: 3, skin: '#6fbf4f', shirt: '#7a5a3a' },
@@ -140,11 +147,11 @@
   let build = null;
   let g = null;
   let shopTab = 'crates';
-  const keys = { left: false, right: false, fire: false };
+  const keys = { fire: false };
   const mouse = { x: W * 0.75, y: H * 0.45, down: false };
 
   function freshBuild() {
-    return { crates: [{ m: 0, blaster: false }], car: 1, gun: 0 };
+    return { crates: [{ m: 0, blaster: null }], car: 1, gun: 0 };
   }
 
   // The porta potty gets more health every level.
@@ -211,7 +218,7 @@
       earned: 0,
       endT: 0,
       far, near, props, cones,
-      autoTarget: null
+      rolling: false
     };
     // A first wave that already crawled out of the porta potty.
     const startWave = 8 + 3 * L;
@@ -498,40 +505,21 @@
       (z.state === 'attack' || z.type === 'spitter') && z.x - z.w / 2 <= right + z.jitter + 2);
   }
 
-  // True when a ground zombie is between you and the closest cone ahead of you.
-  function nextCone() {
-    const right = towerRight();
-    return g.cones.find(x => x > right + CONE_STOP + 10);
-  }
-
-  // True only on the frame a ground zombie walks past the cone.
-  function zombiePassedCone(cone) {
-    return g.zombies.some(z => !z.dead && z.type !== 'flyer' && z.lastX !== undefined &&
-      z.lastX - z.w / 2 >= cone && z.x - z.w / 2 < cone);
-  }
-
+  // Once a zombie walks past the first cone, the car starts crawling forward
+  // by itself and never stops, except when a zombie is in the way.
   function updateTower(dt) {
-    const car = CARS[build.car];
-    const speed = g.hasCar ? car.speed : FOOT_SPEED;
-    let dir = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
-    // A zombie passing the next cone makes the car crawl up to that cone, then stop.
-    if (g.autoTarget === null) {
-      const cone = nextCone();
-      if (cone !== undefined && zombiePassedCone(cone)) {
-        g.autoTarget = cone;
-        addText(towerCX(), towerTopY() - 80, 'Zombie passed the cone! 🐢', '#ff9f1c');
-      }
+    if (!g.rolling && g.zombies.some(z => !z.dead && z.emerge <= 0 && z.type !== 'flyer' && z.x - z.w / 2 < g.cones[0])) {
+      g.rolling = true;
+      addText(towerCX(), towerTopY() - 80, 'Zombie passed the cone! Rolling out 🐢', '#ff9f1c');
     }
-    if (g.autoTarget !== null && towerRight() >= g.autoTarget - CONE_STOP) g.autoTarget = null;
-    const auto = dir === 0 && g.autoTarget !== null;
-    if (auto) dir = 1;
-    if (dir > 0) {
-      // Zombies in the way stop you. The car can't run them over — shoot them!
-      if (blockingZombies().length) dir = 0;
+    // If your blasters stop every zombie before the cone, roll out anyway.
+    if (!g.rolling && g.time > 10) {
+      g.rolling = true;
+      addText(towerCX(), towerTopY() - 80, 'Road is clear! Rolling out 🐢', '#ff9f1c');
     }
-    const v = auto ? TURTLE_SPEED : speed;
-    g.towerX = clamp(g.towerX + dir * v * dt, 20, g.sourceX - 230 - CAR_W);
-    g.wheel += dir * v * dt / 16;
+    if (!g.rolling || blockingZombies().length) return;
+    g.towerX = clamp(g.towerX + TURTLE_SPEED * dt, 20, g.sourceX - 230 - CAR_W);
+    g.wheel += TURTLE_SPEED * dt / 16;
   }
 
   function updateSpawning(dt) {
@@ -560,7 +548,8 @@
         x: mx, y: my, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
         dmg: gun.dmg, life: gun.sniper ? 0.7 : 0.9,
         pierce: gun.pierce || 1, hits: [],
-        kind: gun.laser ? 'laser' : gun.plasma ? 'plasma' : 'bullet'
+        kind: gun.laser ? 'laser' : gun.plasma ? 'plasma' : 'bullet',
+        splash: gun.plasma ? 70 : 0
       });
     }
     g.parts.push({ x: mx, y: my, vx: 0, vy: 0, life: 0.06, max: 0.06, color: '#fff3a0', size: 9, grav: 0 });
@@ -568,28 +557,34 @@
 
   function updateBlasters(dt) {
     g.crates.forEach((c, i) => {
-      if (!c.blaster) return;
+      if (c.blaster === null) return;
+      const B = BLASTERS[c.blaster];
+      const range = B.range || 560;
       const px = towerCX() + BOX_W / 2 + 4;
       const py = crateY(i) + BOX_H / 2;
       let target = null;
-      let bestD = 560;
+      let bestD = range;
       for (const z of g.zombies) {
         if (z.dead || z.emerge > 0) continue;
         const d = Math.hypot(z.x - px, z.y - z.h / 2 - py);
         if (d < bestD) { bestD = d; target = { x: z.x, y: z.y - z.h / 2 }; }
       }
-      if (!target && Math.abs(g.sourceX - px) < 560 && g.sourceHp > 0) {
+      if (!target && Math.abs(g.sourceX - px) < range && g.sourceHp > 0) {
         target = { x: g.sourceX, y: GROUND - 90 };
       }
       c.t -= dt;
       if (!target) return;
       c.ang = Math.atan2(target.y - py, target.x - px);
       if (c.t <= 0) {
-        c.t = 0.6;
+        c.t = B.rate;
+        const a = c.ang + (B.kind === 'flame' ? rand(-0.15, 0.15) : 0);
+        const speed = B.kind === 'flame' ? 420 : B.kind === 'rocket' ? 600 : 850;
         g.bullets.push({
-          x: px + Math.cos(c.ang) * 22, y: py + Math.sin(c.ang) * 22,
-          vx: Math.cos(c.ang) * 850, vy: Math.sin(c.ang) * 850,
-          dmg: 6 + 5 * c.m, life: 0.8, pierce: 1, hits: [], kind: 'blaster'
+          x: px + Math.cos(a) * (B.len + 4), y: py + Math.sin(a) * (B.len + 4),
+          vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+          dmg: B.dmg, life: B.kind === 'flame' ? 0.55 : 0.8,
+          pierce: B.pierce || 1, hits: [], kind: B.kind || 'bolt', color: B.color,
+          splash: B.splash || 0, freeze: !!B.freeze
         });
       }
     });
@@ -605,6 +600,8 @@
       z.lastX = z.x;
       z.phase += dt * (z.speed / 10);
       if (z.hitT > 0) z.hitT -= dt;
+      if (z.slowT > 0) z.slowT -= dt;
+      const mdt = z.slowT > 0 ? dt * 0.4 : dt; // frozen zombies move slower
       if (z.emerge > 0) { z.emerge -= dt; continue; }
       if (!active) continue;
 
@@ -613,8 +610,8 @@
         const dy = top - 30 + Math.sin(z.phase * 0.5) * 25 - z.y;
         const d = Math.hypot(dx, dy) || 1;
         if (d > 30) {
-          z.x += dx / d * z.speed * dt;
-          z.y += dy / d * z.speed * dt;
+          z.x += dx / d * z.speed * mdt;
+          z.y += dy / d * z.speed * mdt;
           z.state = 'walk';
         } else {
           z.state = 'attack';
@@ -627,7 +624,7 @@
         if (!g.crates.length && !g.hasCar) { z.state = 'walk'; z.y = GROUND; continue; }
         z.x = cx + BOX_W / 2 + z.w / 2 - 4;
         if (z.state === 'climb') {
-          z.y -= z.speed * 0.55 * dt;
+          z.y -= z.speed * 0.55 * mdt;
           if (z.y <= top) z.state = 'top';
         }
         if (z.state === 'top') {
@@ -642,7 +639,7 @@
         const dist = z.x - z.w / 2 - right;
         z.x = Math.max(z.x, right + z.w / 2);
         if (dist > 250) {
-          z.x -= z.speed * dt;
+          z.x -= z.speed * mdt;
           z.state = 'walk';
         } else {
           z.state = 'spit';
@@ -657,7 +654,7 @@
 
       const stopX = right + z.w / 2 + z.jitter;
       if (z.x > stopX) {
-        z.x = Math.max(stopX, z.x - z.speed * dt);
+        z.x = Math.max(stopX, z.x - z.speed * mdt);
         z.state = 'walk';
       } else {
         z.x = stopX;
@@ -707,12 +704,14 @@
       for (const z of g.zombies) {
         if (z.dead || z.emerge > 0 || b.hits.includes(z)) continue;
         if (b.x > z.x - z.w / 2 && b.x < z.x + z.w / 2 && b.y > z.y - z.h && b.y < z.y) {
-          if (b.kind === 'plasma') {
+          if (b.splash) {
             for (const o of g.zombies) {
-              if (!o.dead && Math.hypot(o.x - b.x, o.y - o.h / 2 - b.y) < 70) hitZombie(o, b.dmg * 0.5);
+              if (o !== z && !o.dead && Math.hypot(o.x - b.x, o.y - o.h / 2 - b.y) < b.splash) hitZombie(o, b.dmg * 0.5);
             }
-            burst(b.x, b.y, '#a3e635', 18, 260, 6);
+            burst(b.x, b.y, b.kind === 'rocket' ? '#f97316' : '#a3e635', 18, 260, 6);
+            shake(3);
           }
+          if (b.freeze) z.slowT = 1.5;
           hitZombie(z, b.dmg);
           b.hits.push(z);
           if (b.hits.length >= b.pierce) {
@@ -832,12 +831,11 @@
       ctx.fillStyle = '#8a9aa8';
       ctx.fillRect(x - 12, GROUND - 22, 24, 4);
     }
-    const glowCone = g.autoTarget !== null ? g.autoTarget : nextCone();
     for (const c of g.cones) {
       const x = c - camX;
       if (x < -40 || x > W + 40) continue;
-      if (c === glowCone && mode === 'play') {
-        ctx.fillStyle = g.autoTarget !== null ? 'rgba(255,90,90,0.35)' : 'rgba(255,159,28,0.25)';
+      if (c === g.cones[0] && mode === 'play') {
+        ctx.fillStyle = g.rolling ? 'rgba(255,90,90,0.35)' : 'rgba(255,159,28,0.25)';
         ctx.beginPath();
         ctx.ellipse(x, GROUND - 2, 26, 8, 0, 0, Math.PI * 2);
         ctx.fill();
@@ -1019,16 +1017,17 @@
         ctx.stroke();
       }
       drawSplats(c.splats, x, y);
-      if (c.blaster) {
+      if (c.blaster !== null) {
+        const B = BLASTERS[c.blaster];
         const px = x + BOX_W + 4;
         const py = y + BOX_H / 2;
         block(x + BOX_W - 8, py - 9, 16, 18, '#374151');
         ctx.save();
         ctx.translate(px, py);
         ctx.rotate(c.ang);
-        block(0, -4, 22, 8, '#6b7280');
-        ctx.fillStyle = '#22d3ee';
-        ctx.fillRect(18, -3, 5, 6);
+        block(0, -B.thick / 2, B.len, B.thick, '#6b7280');
+        ctx.fillStyle = B.color;
+        ctx.fillRect(B.len - 5, -B.thick / 2 + 1, 5, B.thick - 2);
         ctx.restore();
       }
     });
@@ -1100,7 +1099,7 @@
     const sx = z.x - g.camX;
     if (sx < -120 || sx > W + 120) return;
     const T = TYPES[z.type];
-    const skin = z.hitT > 0 ? '#ffffff' : T.skin;
+    const skin = z.hitT > 0 ? '#ffffff' : z.slowT > 0 ? '#9fd8ff' : T.skin;
     const y = z.y;
     ctx.save();
     if (z.emerge > 0) ctx.globalAlpha = clamp(1 - z.emerge / 0.5, 0.15, 1);
@@ -1182,12 +1181,31 @@
     for (const b of g.bullets) {
       const x = b.x - g.camX;
       if (b.kind === 'laser') {
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = b.color || '#38bdf8';
         ctx.lineWidth = 4;
         ctx.beginPath();
         ctx.moveTo(x, b.y);
         ctx.lineTo(x - b.vx * 0.03, b.y - b.vy * 0.03);
         ctx.stroke();
+      } else if (b.kind === 'flame') {
+        const grow = 1 - b.life / 0.55;
+        ctx.globalAlpha = clamp(b.life / 0.55, 0, 1);
+        ctx.fillStyle = grow < 0.4 ? '#fde047' : '#fb923c';
+        ctx.beginPath();
+        ctx.arc(x, b.y, 4 + grow * 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      } else if (b.kind === 'rocket') {
+        const a = Math.atan2(b.vy, b.vx);
+        ctx.save();
+        ctx.translate(x, b.y);
+        ctx.rotate(a);
+        block(-12, -4, 16, 8, '#e5e7eb');
+        ctx.fillStyle = '#ef4444';
+        ctx.fillRect(4, -4, 5, 8);
+        ctx.fillStyle = '#fb923c';
+        ctx.fillRect(-18, -2, 6, 4);
+        ctx.restore();
       } else if (b.kind === 'plasma') {
         ctx.fillStyle = '#a3e635';
         ctx.beginPath();
@@ -1198,7 +1216,7 @@
         ctx.arc(x, b.y, 3, 0, Math.PI * 2);
         ctx.fill();
       } else {
-        ctx.strokeStyle = b.kind === 'blaster' ? '#22d3ee' : '#ffe680';
+        ctx.strokeStyle = b.color || '#ffe680';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(x, b.y);
@@ -1291,10 +1309,10 @@
   }
 
   // ---------- Shop ----------
-  function shopItems() {
+  function shopItems(tab) {
     const items = [];
     const n = build.crates.length;
-    if (shopTab === 'crates') {
+    if (tab === 'crates') {
       CRATES.forEach((M, m) => {
         let note = `+${M.hp} health. Stacks your tower higher.`;
         let can = true;
@@ -1312,32 +1330,41 @@
               const slot = build.crates.find(c => c.m === weakest);
               slot.m = m;
             } else {
-              build.crates.push({ m, blaster: false });
+              build.crates.push({ m, blaster: null });
             }
           }
         });
       });
-    } else if (shopTab === 'blasters') {
-      const free = build.crates.filter(c => !c.blaster).length;
-      const have = build.crates.filter(c => c.blaster).length;
-      items.push({
-        icon: '🔫', name: 'Blaster',
-        desc: free ? `Auto-shoots zombies. Goes on a crate (you have ${have}). Stronger on better crates!` : 'Every crate already has a blaster. Buy more crates!',
-        cost: BLASTER_COST, can: free > 0,
-        buy() {
-          // Put it on the strongest crate that doesn't have one.
-          let pick = null;
-          for (const c of build.crates) if (!c.blaster && (!pick || c.m > pick.m)) pick = c;
-          pick.blaster = true;
-        }
+    } else if (tab === 'blasters') {
+      BLASTERS.forEach((B, b) => {
+        const have = build.crates.filter(c => c.blaster === b).length;
+        const free = build.crates.find(c => c.blaster === null);
+        const weaker = build.crates.some(c => c.blaster !== null && c.blaster < b);
+        let note = `${B.about} ${B.dmg} damage.` + (have ? ` You have ${have}.` : '');
+        if (!build.crates.length) note = 'Buy a crate first — blasters sit on crates.';
+        else if (!free && !weaker) note = 'Every crate already has a blaster this good. Buy more crates!';
+        else if (!free) note = `${B.about} Swaps out a weaker blaster.`;
+        items.push({
+          icon: B.icon, name: B.name, desc: note, cost: B.cost,
+          can: !!free || weaker,
+          buy() {
+            // Use the strongest empty crate, or swap out the weakest blaster.
+            let pick = null;
+            for (const c of build.crates) if (c.blaster === null && (!pick || c.m > pick.m)) pick = c;
+            if (!pick) {
+              for (const c of build.crates) if (c.blaster < b && (!pick || c.blaster < pick.blaster)) pick = c;
+            }
+            pick.blaster = b;
+          }
+        });
       });
-    } else if (shopTab === 'cars') {
+    } else if (tab === 'cars') {
       CARS.forEach((car, i) => {
         if (!car) return;
         const owned = build.car === i;
         items.push({
           icon: car.tank ? '🪖' : car.hover ? '🛸' : '🚗', name: car.name,
-          desc: owned ? '✔ This is your car.' : `${car.hp} health, speed ${car.speed}.`,
+          desc: owned ? '✔ This is your car.' : `${car.hp} health. Tougher for zombies to wreck.`,
           cost: car.cost, can: !owned,
           buy() { build.car = i; }
         });
@@ -1373,13 +1400,15 @@
     for (const [id, label] of [['crates', '📦 Crates'], ['blasters', '🔫 Blasters'], ['cars', '🚗 Cars'], ['guns', '💥 Guns']]) {
       const t = document.createElement('button');
       t.type = 'button';
-      t.className = 'shop-tab' + (shopTab === id ? ' selected' : '');
+      // A tab lights up when it has something you can afford.
+      const deal = shopItems(id).some(item => !item.header && item.can && coins >= item.cost);
+      t.className = 'shop-tab' + (shopTab === id ? ' selected' : '') + (deal ? ' has-deal' : '');
       t.textContent = label;
       t.addEventListener('click', () => { shopTab = id; renderShop(); });
       tabs.appendChild(t);
     }
     shopEl.appendChild(tabs);
-    for (const item of shopItems()) {
+    for (const item of shopItems(shopTab)) {
       if (item.header) {
         const h = document.createElement('div');
         h.className = 'shop-header';
@@ -1391,6 +1420,7 @@
       btn.type = 'button';
       btn.className = 'shop-item';
       btn.disabled = !item.can || coins < item.cost;
+      btn.classList.toggle('affordable', !btn.disabled);
       btn.innerHTML = `<span class="shop-icon"></span><span class="shop-text"><span class="shop-name"></span><span class="shop-desc"></span></span><span class="shop-cost"></span>`;
       btn.querySelector('.shop-icon').textContent = item.icon;
       btn.querySelector('.shop-name').textContent = item.name;
@@ -1454,9 +1484,7 @@
   // ---------- Input ----------
   function setKey(e, down) {
     const k = e.key.toLowerCase();
-    if (k === 'a' || k === 'arrowleft') keys.left = down;
-    else if (k === 'd' || k === 'arrowright') keys.right = down;
-    else if (k === ' ') keys.fire = down;
+    if (k === ' ') keys.fire = down;
     else return false;
     return true;
   }
@@ -1470,7 +1498,7 @@
   });
   window.addEventListener('keyup', e => setKey(e, false));
   window.addEventListener('blur', () => {
-    keys.left = keys.right = keys.fire = false;
+    keys.fire = false;
     mouse.down = false;
     setPaused(true);
   });
@@ -1488,18 +1516,6 @@
   });
   canvas.addEventListener('pointerup', () => { mouse.down = false; });
   canvas.addEventListener('pointercancel', () => { mouse.down = false; });
-
-  function holdButton(id, key) {
-    const el = document.getElementById(id);
-    const on = e => { e.preventDefault(); keys[key] = true; };
-    const off = () => { keys[key] = false; };
-    el.addEventListener('pointerdown', on);
-    el.addEventListener('pointerup', off);
-    el.addEventListener('pointerleave', off);
-    el.addEventListener('pointercancel', off);
-  }
-  holdButton('left-button', 'left');
-  holdButton('right-button', 'right');
 
   // ---------- Loop ----------
   let last = performance.now();

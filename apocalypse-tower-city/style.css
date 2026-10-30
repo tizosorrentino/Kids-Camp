@@ -236,30 +236,6 @@ button {
   white-space: nowrap;
 }
 
-#touch-controls {
-  display: flex;
-  width: 100%;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-#touch-controls button {
-  font-size: 2rem;
-  width: 84px;
-  height: 64px;
-  border-radius: 14px;
-  border: 3px solid #000;
-  background: var(--toxic);
-  color: #10200a;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-
 @media (max-width: 720px) {
   .overlay.side {
     width: 100%;
@@ -306,4 +282,19 @@ button {
   position: sticky;
   bottom: 0;
   margin-top: 4px;
+}
+
+.shop-item.affordable {
+  background: #24401a;
+  border-color: var(--toxic);
+  box-shadow: 0 0 10px rgba(140, 255, 90, 0.45);
+}
+
+.shop-item.affordable .shop-cost {
+  color: #fff27a;
+}
+
+.shop-tab.has-deal:not(.selected) {
+  border-color: var(--toxic);
+  box-shadow: 0 0 8px rgba(140, 255, 90, 0.5);
 }
