@@ -1,5 +1,5 @@
 /* ============================================================
-   ARCTIC ALIEN ASSAULT
+   HALO
    First-person 3D shooter built on three.js (no build step).
    ============================================================ */
 
