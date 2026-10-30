@@ -13,6 +13,9 @@
   const BOX_H = 44;
   const MAX_CRATES = 7;
   const PLAYER_MAX_HP = 100;
+  // Prices and coin rewards are both 100x bigger than they started, so it stays fair.
+  const COIN_SCALE = 100;
+  const fmt = n => Math.round(n).toLocaleString('en-US');
   const TURTLE_SPEED = 30; // the car crawls on its own once a zombie passes the first cone
   const BEST_KEY = 'apocalypseTowerCityBestLevel';
   const reduceMotion = window.matchMedia &&
@@ -20,52 +23,52 @@
 
   // Crates go from weakest to strongest.
   const CRATES = [
-    { name: 'Wooden Crate', icon: '🪵', hp: 70, cost: 20, fill: '#b07a3a', edge: '#7a4f20', shine: '#d19a55' },
-    { name: 'Metal Crate', icon: '🔩', hp: 130, cost: 50, fill: '#8a9099', edge: '#555b63', shine: '#b8bec7' },
-    { name: 'Titanium Crate', icon: '🛡️', hp: 210, cost: 110, fill: '#7fa6c9', edge: '#4a6f91', shine: '#c4e0f5' },
-    { name: 'Gold Crate', icon: '👑', hp: 330, cost: 220, fill: '#e8b923', edge: '#a87f0c', shine: '#fff09a' }
+    { name: 'Wooden Crate', icon: '🪵', hp: 70, cost: 2_000, fill: '#b07a3a', edge: '#7a4f20', shine: '#d19a55' },
+    { name: 'Metal Crate', icon: '🔩', hp: 130, cost: 5_000, fill: '#8a9099', edge: '#555b63', shine: '#b8bec7' },
+    { name: 'Titanium Crate', icon: '🛡️', hp: 210, cost: 11_000, fill: '#7fa6c9', edge: '#4a6f91', shine: '#c4e0f5' },
+    { name: 'Gold Crate', icon: '👑', hp: 330, cost: 22_000, fill: '#e8b923', edge: '#a87f0c', shine: '#fff09a' }
   ];
 
   // Cars from worst to best. Index 0 means "no car".
   const CARS = [
     null,
-    { name: 'Old Jeep', hp: 90, cost: 40, color: '#6b8e4e', wheels: 2 },
-    { name: 'Pickup Truck', hp: 150, cost: 100, color: '#c0392b', wheels: 2 },
-    { name: 'Monster Truck', hp: 230, cost: 220, color: '#e67e22', wheels: 2, big: true },
-    { name: 'Armored Truck', hp: 340, cost: 380, color: '#4b5563', wheels: 3, spikes: true },
-    { name: 'Battle Tank', hp: 480, cost: 600, color: '#3f6212', tank: true, spikes: true },
-    { name: 'Hover Tank', hp: 650, cost: 900, color: '#6d28d9', hover: true, spikes: true }
+    { name: 'Old Jeep', hp: 90, cost: 4_000, color: '#6b8e4e', wheels: 2 },
+    { name: 'Pickup Truck', hp: 150, cost: 10_000, color: '#c0392b', wheels: 2 },
+    { name: 'Monster Truck', hp: 230, cost: 22_000, color: '#e67e22', wheels: 2, big: true },
+    { name: 'Armored Truck', hp: 340, cost: 38_000, color: '#4b5563', wheels: 3, spikes: true },
+    { name: 'Battle Tank', hp: 480, cost: 60_000, color: '#3f6212', tank: true, spikes: true },
+    { name: 'Hover Tank', hp: 650, cost: 90_000, color: '#6d28d9', hover: true, spikes: true }
   ];
 
   // Guns come in five kinds. In each kind, the more a gun costs, the more damage it does.
   const GUNS = [
     { cat: 'Pistols', name: 'Pistol', dmg: 8, rate: 0.35, spread: 0.02, shots: 1, cost: 0, len: 14, color: '#555' },
-    { cat: 'Pistols', name: 'Revolver', dmg: 16, rate: 0.45, spread: 0.02, shots: 1, cost: 40, len: 16, color: '#8a8f99' },
-    { cat: 'Pistols', name: 'Golden Hand Cannon', dmg: 32, rate: 0.45, spread: 0.02, shots: 1, cost: 140, len: 18, color: '#e8b923' },
-    { cat: 'MGs', name: 'SMG', dmg: 10, rate: 0.14, spread: 0.06, shots: 1, cost: 60, len: 20, color: '#333', mag: true },
-    { cat: 'MGs', name: 'Assault MG', dmg: 16, rate: 0.1, spread: 0.05, shots: 1, cost: 220, len: 28, color: '#222', mag: true },
-    { cat: 'MGs', name: 'Heavy MG', dmg: 28, rate: 0.09, spread: 0.05, shots: 1, cost: 480, len: 32, color: '#3f4a3a', mag: true },
-    { cat: 'Shotguns', name: 'Pump Shotgun', dmg: 12, rate: 0.55, spread: 0.16, shots: 5, cost: 150, len: 28, color: '#6b4423', stock: true },
-    { cat: 'Shotguns', name: 'Double Barrel', dmg: 18, rate: 0.6, spread: 0.18, shots: 7, cost: 320, len: 30, color: '#5a3a1a', stock: true },
-    { cat: 'Shotguns', name: 'Auto Shotgun', dmg: 24, rate: 0.35, spread: 0.16, shots: 6, cost: 600, len: 30, color: '#2b2b2b', stock: true },
-    { cat: 'Spamming Guns', name: 'Spam Blaster', dmg: 6, rate: 0.045, spread: 0.09, shots: 1, cost: 180, len: 24, color: '#d946ef', spam: true },
-    { cat: 'Spamming Guns', name: 'Minigun', dmg: 12, rate: 0.035, spread: 0.08, shots: 1, cost: 520, len: 32, color: '#444', spam: true },
-    { cat: 'Spamming Guns', name: 'Mega Spammer', dmg: 22, rate: 0.03, spread: 0.08, shots: 1, cost: 950, len: 34, color: '#f43f5e', spam: true },
-    { cat: 'Snipers', name: 'Hunting Rifle', dmg: 45, rate: 0.9, spread: 0, shots: 1, cost: 100, len: 34, color: '#6b4423', sniper: true, pierce: 2 },
-    { cat: 'Snipers', name: 'Sniper Rifle', dmg: 120, rate: 1.0, spread: 0, shots: 1, cost: 380, len: 40, color: '#1f2937', sniper: true, pierce: 3 },
-    { cat: 'Snipers', name: 'Laser Sniper', dmg: 280, rate: 0.9, spread: 0, shots: 1, cost: 850, len: 40, color: '#0ea5e9', sniper: true, pierce: 5, laser: true },
-    { cat: 'Special', name: 'Plasma Cannon', dmg: 120, rate: 0.14, spread: 0.01, shots: 1, cost: 1200, len: 34, color: '#a3e635', plasma: true }
+    { cat: 'Pistols', name: 'Revolver', dmg: 16, rate: 0.45, spread: 0.02, shots: 1, cost: 4_000, len: 16, color: '#8a8f99' },
+    { cat: 'Pistols', name: 'Golden Hand Cannon', dmg: 32, rate: 0.45, spread: 0.02, shots: 1, cost: 14_000, len: 18, color: '#e8b923' },
+    { cat: 'MGs', name: 'SMG', dmg: 10, rate: 0.14, spread: 0.06, shots: 1, cost: 6_000, len: 20, color: '#333', mag: true },
+    { cat: 'MGs', name: 'Assault MG', dmg: 16, rate: 0.1, spread: 0.05, shots: 1, cost: 22_000, len: 28, color: '#222', mag: true },
+    { cat: 'MGs', name: 'Heavy MG', dmg: 28, rate: 0.09, spread: 0.05, shots: 1, cost: 48_000, len: 32, color: '#3f4a3a', mag: true },
+    { cat: 'Shotguns', name: 'Pump Shotgun', dmg: 12, rate: 0.55, spread: 0.16, shots: 5, cost: 15_000, len: 28, color: '#6b4423', stock: true },
+    { cat: 'Shotguns', name: 'Double Barrel', dmg: 18, rate: 0.6, spread: 0.18, shots: 7, cost: 32_000, len: 30, color: '#5a3a1a', stock: true },
+    { cat: 'Shotguns', name: 'Auto Shotgun', dmg: 24, rate: 0.35, spread: 0.16, shots: 6, cost: 60_000, len: 30, color: '#2b2b2b', stock: true },
+    { cat: 'Spamming Guns', name: 'Spam Blaster', dmg: 6, rate: 0.045, spread: 0.09, shots: 1, cost: 18_000, len: 24, color: '#d946ef', spam: true },
+    { cat: 'Spamming Guns', name: 'Minigun', dmg: 12, rate: 0.035, spread: 0.08, shots: 1, cost: 52_000, len: 32, color: '#444', spam: true },
+    { cat: 'Spamming Guns', name: 'Mega Spammer', dmg: 22, rate: 0.03, spread: 0.08, shots: 1, cost: 95_000, len: 34, color: '#f43f5e', spam: true },
+    { cat: 'Snipers', name: 'Hunting Rifle', dmg: 45, rate: 0.9, spread: 0, shots: 1, cost: 10_000, len: 34, color: '#6b4423', sniper: true, pierce: 2 },
+    { cat: 'Snipers', name: 'Sniper Rifle', dmg: 120, rate: 1.0, spread: 0, shots: 1, cost: 38_000, len: 40, color: '#1f2937', sniper: true, pierce: 3 },
+    { cat: 'Snipers', name: 'Laser Sniper', dmg: 280, rate: 0.9, spread: 0, shots: 1, cost: 85_000, len: 40, color: '#0ea5e9', sniper: true, pierce: 5, laser: true },
+    { cat: 'Special', name: 'Plasma Cannon', dmg: 120, rate: 0.14, spread: 0.01, shots: 1, cost: 120_000, len: 34, color: '#a3e635', plasma: true }
   ];
 
   // Blasters sit on your crates and shoot zombies by themselves. One per crate.
   const BLASTERS = [
-    { name: 'Mini Blaster', icon: '🔫', dmg: 6, rate: 0.6, cost: 70, color: '#22d3ee', len: 18, thick: 7, about: 'Shoots little blue bolts.' },
-    { name: 'Rapid Blaster', icon: '⚡', dmg: 6, rate: 0.18, cost: 160, color: '#facc15', len: 20, thick: 6, about: 'Fires super fast.' },
-    { name: 'Freeze Ray', icon: '❄️', dmg: 8, rate: 0.35, cost: 260, color: '#93c5fd', len: 20, thick: 8, freeze: true, about: 'Freezes zombies so they walk slower.' },
-    { name: 'Laser Turret', icon: '🔦', dmg: 30, rate: 0.5, cost: 380, color: '#38bdf8', len: 24, thick: 6, pierce: 3, kind: 'laser', about: 'Lasers zap through 3 zombies.' },
-    { name: 'Flame Thrower', icon: '🔥', dmg: 5, rate: 0.05, cost: 450, color: '#fb923c', len: 16, thick: 10, range: 240, pierce: 3, kind: 'flame', about: 'Burns zombies that get close.' },
-    { name: 'Rocket Launcher', icon: '🚀', dmg: 70, rate: 1.3, cost: 550, color: '#f97316', len: 24, thick: 11, splash: 90, kind: 'rocket', about: 'Rockets blow up whole groups.' },
-    { name: 'Mega Cannon', icon: '💣', dmg: 160, rate: 1.0, cost: 800, color: '#a855f7', len: 30, thick: 12, pierce: 4, about: 'Giant shots that smash through 4 zombies.' }
+    { name: 'Mini Blaster', icon: '🔫', dmg: 6, rate: 0.6, cost: 7_000, color: '#22d3ee', len: 18, thick: 7, about: 'Shoots little blue bolts.' },
+    { name: 'Rapid Blaster', icon: '⚡', dmg: 6, rate: 0.18, cost: 16_000, color: '#facc15', len: 20, thick: 6, about: 'Fires super fast.' },
+    { name: 'Freeze Ray', icon: '❄️', dmg: 8, rate: 0.35, cost: 26_000, color: '#93c5fd', len: 20, thick: 8, freeze: true, about: 'Freezes zombies so they walk slower.' },
+    { name: 'Laser Turret', icon: '🔦', dmg: 30, rate: 0.5, cost: 38_000, color: '#38bdf8', len: 24, thick: 6, pierce: 3, kind: 'laser', about: 'Lasers zap through 3 zombies.' },
+    { name: 'Flame Thrower', icon: '🔥', dmg: 5, rate: 0.05, cost: 45_000, color: '#fb923c', len: 16, thick: 10, range: 240, pierce: 3, kind: 'flame', about: 'Burns zombies that get close.' },
+    { name: 'Rocket Launcher', icon: '🚀', dmg: 70, rate: 1.3, cost: 55_000, color: '#f97316', len: 24, thick: 11, splash: 90, kind: 'rocket', about: 'Rockets blow up whole groups.' },
+    { name: 'Mega Cannon', icon: '💣', dmg: 160, rate: 1.0, cost: 80_000, color: '#a855f7', len: 30, thick: 12, pierce: 4, about: 'Giant shots that smash through 4 zombies.' }
   ];
 
   const TYPES = {
@@ -271,7 +274,7 @@
       hp: T.hp * hpM, maxHp: T.hp * hpM,
       speed: T.speed * spM * rand(0.85, 1.15),
       dps: T.dps * dM,
-      coins: Math.round(T.coins * (1 + 0.2 * (L - 1))),
+      coins: Math.round(T.coins * (1 + 0.2 * (L - 1))) * COIN_SCALE,
       state: 'walk',
       hitT: 0,
       phase: Math.random() * 6,
@@ -406,7 +409,7 @@
       coins += z.coins;
       g.earned += z.coins;
       g.kills++;
-      addText(z.x, z.y - z.h - 10, '+' + z.coins + ' 🪙', '#ffd23f');
+      addText(z.x, z.y - z.h - 10, '+' + fmt(z.coins) + ' 🪙', '#ffd23f');
     }
   }
 
@@ -437,7 +440,7 @@
   }
 
   function finishWin() {
-    const bonus = 40 + 20 * level;
+    const bonus = (40 + 20 * level) * COIN_SCALE;
     coins += bonus;
     best = Math.max(best, level);
     saveBest(best);
@@ -447,7 +450,7 @@
     mode = 'won';
     resultTitle.textContent = `Level ${level} Cleared! 🚽💥`;
     let text = `You blew up the porta potty and blasted ${g.kills} zombies. ` +
-      `You earned ${g.earned} coins plus a ${bonus} coin bonus!`;
+      `You earned ${fmt(g.earned)} coins plus a ${fmt(bonus)} coin bonus!`;
     if (!g.hasCar) text += ' Your car was wrecked, so you need to buy a new one.';
     resultText.textContent = text;
     nextButton.classList.remove('hidden');
@@ -1267,7 +1270,7 @@
     ctx.fillStyle = '#8cff5a';
     ctx.fillText(`Level ${level}`, 14, 26);
     ctx.fillStyle = '#ffd23f';
-    ctx.fillText(`🪙 ${coins}`, 14, 52);
+    ctx.fillText(`🪙 ${fmt(coins)}`, 14, 52);
 
     const c = g.crates[0];
     if (c) hudBar(130, 8, 210, `Bottom ${CRATES[c.m].name} (${g.crates.length})`, c.hp, c.max, '#d19a55');
@@ -1391,7 +1394,7 @@
 
   function renderShop() {
     buildLevelEl.textContent = `Next up: Level ${level}  •  Porta potty health: ${pottyHp(level)}`;
-    buildCoinsEl.textContent = `🪙 ${coins} coins`;
+    buildCoinsEl.textContent = `🪙 ${fmt(coins)} coins`;
     buildTipEl.textContent = NEW_ZOMBIE_TIPS[level] ||
       (level % 3 === 0 ? 'A BOSS zombie comes out this level!' : 'The zombies are tougher and hit harder now!');
     shopEl.innerHTML = '';
@@ -1425,7 +1428,7 @@
       btn.querySelector('.shop-icon').textContent = item.icon;
       btn.querySelector('.shop-name').textContent = item.name;
       btn.querySelector('.shop-desc').textContent = item.desc;
-      btn.querySelector('.shop-cost').textContent = item.cost ? `🪙 ${item.cost}` : 'Free';
+      btn.querySelector('.shop-cost').textContent = item.cost ? `🪙 ${fmt(item.cost)}` : 'Free';
       btn.addEventListener('click', () => {
         if (coins < item.cost || !item.can) return;
         coins -= item.cost;
