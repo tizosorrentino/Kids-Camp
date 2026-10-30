@@ -1585,10 +1585,19 @@
       if (canDrag(row.key)) el.addEventListener('pointerdown', e => startDrag(row.key, e, 'list'));
       stuffEl.appendChild(el);
       if (row.key !== selectedKey) continue;
+      // The trash can sits right on the side of the thing you picked.
+      if (row.canSell) {
+        const trash = actionButton(`🗑️ ${fmt(row.value)}`, 'trash-button', e => { e.stopPropagation(); sellSelected(); });
+        trash.setAttribute('aria-label', `Sell ${row.name} for ${fmt(row.value)} coins`);
+        el.appendChild(trash);
+      }
       const actions = document.createElement('div');
       actions.className = 'sell-row';
       if (row.canSell) {
-        actions.appendChild(actionButton(`🗑️ Sell for 🪙 ${fmt(row.value)}`, 'trash-button', sellSelected));
+        const note = document.createElement('span');
+        note.className = 'shop-desc';
+        note.textContent = `Tap 🗑️ to sell it for 🪙 ${fmt(row.value)}.`;
+        actions.appendChild(note);
       } else {
         const why = document.createElement('span');
         why.className = 'shop-desc';
@@ -1722,8 +1731,32 @@
       ctx.fillText(`${row.icon} ${row.name}`, m.x - g.camX, m.y - 16);
     } else if (selectedKey) {
       outline(selectedKey, '#fde047');
+      const t = trashSpot();
+      if (t) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ff5a5a';
+        ctx.strokeStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.font = '18px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('🗑️', t.x, t.y + 1);
+        ctx.textBaseline = 'alphabetic';
+      }
     }
     ctx.restore();
+  }
+
+  // The trash can drawn on the left side of the picked part (blasters stick out on the right).
+  function trashSpot() {
+    const row = stuffRows().find(r => r.key === selectedKey);
+    const r = selectedKey && stuffRect(selectedKey);
+    if (!row || !row.canSell || !r) return null;
+    return { x: r.x - 24, y: r.y + r.h / 2, r: 17 };
   }
 
   // ---------- Flow ----------
@@ -1809,6 +1842,14 @@
   canvas.addEventListener('pointerdown', e => {
     setMouse(e);
     if (mode === 'build') {
+      const t = trashSpot();
+      if (t) {
+        const w = toWorld(mouse.x, mouse.y);
+        if (Math.hypot(w.x - g.camX - t.x, w.y - t.y) <= t.r + 4) {
+          sellSelected();
+          return;
+        }
+      }
       const key = stuffAt(mouse.x, mouse.y);
       if (key) {
         startDrag(key, e, 'canvas');
