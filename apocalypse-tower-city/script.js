@@ -11,7 +11,6 @@
   const CAR_H = 46;
   const BOX_W = 66;
   const BOX_H = 44;
-  const MAX_CRATES = 7;
   const PLAYER_MAX_HP = 100;
   // Prices and the level bonus are 100x bigger than they started; zombies pay 50x.
   const COIN_SCALE = 100;
@@ -100,6 +99,7 @@
   const buildLevelEl = document.getElementById('build-level');
   const buildCoinsEl = document.getElementById('build-coins');
   const buildTipEl = document.getElementById('build-tip');
+  const stuffEl = document.getElementById('stuff');
   const resultTitle = document.getElementById('result-title');
   const resultText = document.getElementById('result-text');
   const nextButton = document.getElementById('next-button');
@@ -151,11 +151,16 @@
   let build = null;
   let g = null;
   let shopTab = 'crates';
+  let selectedKey = null; // the part of your tower picked for selling
+  let lastTap = { key: null, t: 0 };
+  const BUILD_TOWER_X = 470;
+  const BUILD_SCREEN_X = 528; // where your tower shows on the build screen, between the panels
   const keys = { fire: false };
   const mouse = { x: W * 0.75, y: H * 0.45, down: false };
 
   function freshBuild() {
-    return { crates: [{ m: 0, blaster: null }], car: 1, gun: 0 };
+    // Your tower is a stack of parts from the bottom up: cars and crates in any order.
+    return { stack: [{ type: 'car', c: 1 }, { type: 'crate', m: 0, blaster: null }], gun: 0 };
   }
 
   // The porta potty gets more health every level.
@@ -187,7 +192,6 @@
       cones.push(x);
       if (r() < 0.5) props.push({ x: x + 120 + r() * 80, kind: 1, c: r() });
     }
-    const car = CARS[build.car];
     g = {
       towerX: 120,
       camX: 0,
@@ -195,10 +199,8 @@
       sourceMax: pottyHp(L),
       sourceHp: pottyHp(L),
       doorT: 0,
-      crates: build.crates.map(c => ({ m: c.m, blaster: c.blaster, hp: CRATES[c.m].hp, max: CRATES[c.m].hp, ang: Math.PI, t: rand(0, 0.5), splats: [] })),
-      hasCar: !!car,
-      carHp: car ? car.hp : 0,
-      carMax: car ? car.hp : 1,
+      stack: build.stack.map(p => ({ ...p, hp: partHp(p), max: partHp(p), ang: Math.PI, t: rand(0, 0.5), splats: [] })),
+      zoom: 1,
       playerHp: PLAYER_MAX_HP,
       drop: 0,
       zombies: [],
@@ -207,7 +209,6 @@
       parts: [],
       texts: [],
       stains: [],
-      carSplats: [],
       playerSplats: [],
       gunSplats: [],
       spawnT: 1.5,
@@ -233,16 +234,33 @@
   }
 
   // ---------- Tower geometry ----------
+  const partH = p => p.type === 'car' ? CAR_H : BOX_H;
+  const partW = p => p.type === 'car' ? CAR_W : BOX_W;
+  const partHp = p => p.type === 'car' ? CARS[p.c].hp : CRATES[p.m].hp;
+  const partName = p => p.type === 'car' ? CARS[p.c].name : CRATES[p.m].name;
+  const partCost = p => p.type === 'car' ? CARS[p.c].cost : CRATES[p.m].cost;
+
   function towerCX() { return g.towerX + CAR_W / 2; }
-  function carTopY() { return g.hasCar ? GROUND - CAR_H : GROUND; }
-  function crateY(i) { return carTopY() - (i + 1) * BOX_H - g.drop; }
-  function towerTopY() { return carTopY() - g.crates.length * BOX_H - g.drop; }
-  function towerLeft() { return g.hasCar ? g.towerX : towerCX() - 12; }
-  function towerRight() { return g.hasCar ? g.towerX + CAR_W : towerCX() + 12; }
+  // Top edge of stack part i (part 0 sits on the road). partY(-1) is the road.
+  function partY(i) {
+    let y = GROUND - g.drop;
+    for (let k = 0; k <= i; k++) y -= partH(g.stack[k]);
+    return y;
+  }
+  function towerTopY() { return partY(g.stack.length - 1); }
+  function baseHalfW() { return g.stack.length ? partW(g.stack[0]) / 2 : 12; }
+  function widestHalfW() { return g.stack.reduce((m, p) => Math.max(m, partW(p) / 2), 12); }
+  function towerLeft() { return towerCX() - baseHalfW(); }
+  function towerRight() { return towerCX() + baseHalfW(); }
+  // Turns a point on the screen into a point in the world (the view zooms out for tall towers).
+  function toWorld(mx, my) {
+    return { x: g.camX + mx / g.zoom, y: GROUND + (my - GROUND) / g.zoom };
+  }
   function shoulder() { return { x: towerCX(), y: towerTopY() - 38 }; }
   function aimAngle() {
     const s = shoulder();
-    return Math.atan2(mouse.y - s.y, mouse.x + g.camX - s.x);
+    const m = toWorld(mouse.x, mouse.y);
+    return Math.atan2(m.y - s.y, m.x - s.x);
   }
 
   // ---------- Spawning ----------
@@ -336,36 +354,30 @@
     if (!reduceMotion) g.shake = Math.max(g.shake, amount);
   }
 
-  // Zombies break crates first, then the car, then you.
+  // Zombies break the bottom of your tower first, part by part, then you.
   function damageTower(amount) {
     if (mode !== 'play') return;
     g.hurtT = 0.12;
-    if (g.crates.length) {
-      const c = g.crates[0];
-      c.hp -= amount;
-      if (c.hp <= 0) {
-        const y = crateY(0) + BOX_H / 2;
-        burst(towerCX(), y, CRATES[c.m].fill, 22, 260, 7);
-        addText(towerCX(), y, CRATES[c.m].name + ' smashed!', '#ffb347');
-        g.crates.shift();
-        g.drop += BOX_H;
-        shake(8);
-      }
+    const p = g.stack[0];
+    if (!p) {
+      damagePlayer(amount);
       return;
     }
-    if (g.hasCar) {
-      g.carHp -= amount;
-      if (g.carHp <= 0) {
-        g.hasCar = false;
-        burst(towerCX(), GROUND - 30, '#ff9f1c', 40, 380, 8);
-        burst(towerCX(), GROUND - 30, '#333', 25, 260, 9);
-        addText(towerCX(), GROUND - 90, 'Your car got wrecked!', '#ff5a5a');
-        g.drop += CAR_H;
-        shake(14);
-      }
-      return;
+    p.hp -= amount;
+    if (p.hp > 0) return;
+    const y = partY(0) + partH(p) / 2;
+    if (p.type === 'car') {
+      burst(towerCX(), y, '#ff9f1c', 40, 380, 8);
+      burst(towerCX(), y, '#333', 25, 260, 9);
+      addText(towerCX(), y - 40, partName(p) + ' wrecked!', '#ff5a5a');
+      shake(14);
+    } else {
+      burst(towerCX(), y, CRATES[p.m].fill, 22, 260, 7);
+      addText(towerCX(), y, partName(p) + ' smashed!', '#ffb347');
+      shake(8);
     }
-    damagePlayer(amount);
+    g.stack.shift();
+    g.drop += partH(p);
   }
 
   function damagePlayer(amount) {
@@ -400,8 +412,7 @@
         if (o !== z && !o.dead && o.x > z.x && o.x - z.x < 90 && (!behind || o.x < behind.x)) behind = o;
       }
       if (behind) splatOn(behind.splats, n, -behind.w / 2, behind.w / 2, -behind.h, 0);
-      g.crates.slice(0, 3).forEach(c => splatOn(c.splats, n, 2, BOX_W - 2, 2, BOX_H - 2));
-      if (g.hasCar) splatOn(g.carSplats, n, CAR_W * 0.4, CAR_W - 4, 8, CAR_H - 22);
+      g.stack.slice(0, 3).forEach(p => splatOn(p.splats, n, 2, partW(p) - 2, 2, partH(p) - 2));
       splatOn(g.playerSplats, n - 1, -10, 10, -60, -4);
       splatOn(g.gunSplats, n - 1, 14, 14 + GUNS[build.gun].len, -4, 3);
     }
@@ -446,13 +457,13 @@
     best = Math.max(best, level);
     saveBest(best);
     // Whatever survived comes with you. Smashed stuff is gone for good.
-    build.crates = g.crates.map(c => ({ m: c.m, blaster: c.blaster }));
-    if (!g.hasCar) build.car = 0;
+    const lost = build.stack.length - g.stack.length;
+    build.stack = g.stack.map(p => p.type === 'car' ? { type: 'car', c: p.c } : { type: 'crate', m: p.m, blaster: p.blaster });
     mode = 'won';
     resultTitle.textContent = `Level ${level} Cleared! 🚽💥`;
     let text = `You blew up the porta potty and blasted ${g.kills} zombies. ` +
       `You earned ${fmt(g.earned)} coins plus a ${fmt(bonus)} coin bonus!`;
-    if (!g.hasCar) text += ' Your car was wrecked, so you need to buy a new one.';
+    if (lost > 0) text += ` The zombies smashed ${lost} part${lost > 1 ? 's' : ''} of your tower. Buy new ones in the shop.`;
     resultText.textContent = text;
     nextButton.classList.remove('hidden');
     restartButton.classList.add('hidden');
@@ -560,12 +571,12 @@
   }
 
   function updateBlasters(dt) {
-    g.crates.forEach((c, i) => {
-      if (c.blaster === null) return;
+    g.stack.forEach((c, i) => {
+      if (c.type !== 'crate' || c.blaster === null) return;
       const B = BLASTERS[c.blaster];
       const range = B.range || 560;
       const px = towerCX() + BOX_W / 2 + 4;
-      const py = crateY(i) + BOX_H / 2;
+      const py = partY(i) + BOX_H / 2;
       let target = null;
       let bestD = range;
       for (const z of g.zombies) {
@@ -625,8 +636,8 @@
       }
 
       if (z.state === 'climb' || z.state === 'top') {
-        if (!g.crates.length && !g.hasCar) { z.state = 'walk'; z.y = GROUND; continue; }
-        z.x = cx + BOX_W / 2 + z.w / 2 - 4;
+        if (!g.stack.length) { z.state = 'walk'; z.y = GROUND; continue; }
+        z.x = cx + widestHalfW() + z.w / 2 - 4;
         if (z.state === 'climb') {
           z.y -= z.speed * 0.55 * mdt;
           if (z.y <= top) z.state = 'top';
@@ -662,9 +673,9 @@
         z.state = 'walk';
       } else {
         z.x = stopX;
-        if (z.type === 'climber' && (g.crates.length || g.hasCar)) {
+        if (z.type === 'climber' && g.stack.length) {
           z.state = 'climb';
-          z.y = carTopY();
+          z.y = partY(0);
         } else {
           z.state = 'attack';
           damageTower(z.dps * dt);
@@ -759,7 +770,7 @@
   }
 
   function updateCamera(dt) {
-    const target = clamp(g.towerX - 180, 0, g.sourceX + 220 - W);
+    const target = clamp(g.towerX - 180, 0, g.sourceX + 220 - W / g.zoom);
     g.camX += (target - g.camX) * Math.min(1, dt * 5);
   }
 
@@ -819,6 +830,11 @@
     ctx.fillRect(0, GROUND, W, 5);
     ctx.fillStyle = '#b8a447';
     for (let x = -(camX % 80); x < W; x += 80) ctx.fillRect(x, GROUND + 32, 40, 5);
+  }
+
+  // Stains, barrels and cones sit in the world, so they zoom with it.
+  function drawGroundStuff() {
+    const camX = g.camX;
     ctx.fillStyle = '#7a0a10';
     for (const s of g.stains) {
       const x = s.x - camX;
@@ -922,26 +938,23 @@
     ctx.fillRect(x - bw / 2 + 2, top - 56, (bw - 4) * Math.max(0, g.sourceHp / g.sourceMax), 8);
   }
 
-  function drawCar() {
-    if (!g.hasCar) return;
-    const car = CARS[build.car];
-    const x = g.towerX - g.camX;
-    const y = GROUND - CAR_H;
-    const flash = g.hurtT > 0 && !g.crates.length;
+  function drawCarPart(p, x, y, flash) {
+    const car = CARS[p.c];
+    const bot = y + CAR_H;
     const body = flash ? '#fff' : car.color;
     if (car.tank) {
-      block(x + 4, GROUND - 22, CAR_W - 8, 22, '#222');
+      block(x + 4, bot - 22, CAR_W - 8, 22, '#222');
       ctx.fillStyle = '#555';
       for (let i = 0; i < 5; i++) {
         ctx.beginPath();
-        ctx.arc(x + 18 + i * (CAR_W - 36) / 4, GROUND - 11, 7, 0, Math.PI * 2);
+        ctx.arc(x + 18 + i * (CAR_W - 36) / 4, bot - 11, 7, 0, Math.PI * 2);
         ctx.fill();
       }
       block(x, y, CAR_W, CAR_H - 20, body);
     } else if (car.hover) {
       const bob = Math.sin(g.time * 6) * 3;
       ctx.fillStyle = 'rgba(160,120,255,0.5)';
-      ctx.fillRect(x + 14, GROUND - 14, CAR_W - 28, 10);
+      ctx.fillRect(x + 14, bot - 14, CAR_W - 28, 10);
       block(x, y + bob, CAR_W, CAR_H - 16, body);
       ctx.fillStyle = '#c4b5fd';
       ctx.fillRect(x + 10, y + 16 + bob, CAR_W - 20, 4);
@@ -953,20 +966,20 @@
       for (const wx of wheels) {
         ctx.fillStyle = '#111';
         ctx.beginPath();
-        ctx.arc(x + wx, GROUND - wheelR, wheelR, 0, Math.PI * 2);
+        ctx.arc(x + wx, bot - wheelR, wheelR, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = '#999';
         ctx.lineWidth = 3;
         ctx.beginPath();
         for (let k = 0; k < 2; k++) {
           const a = g.wheel + k * Math.PI / 2;
-          ctx.moveTo(x + wx - Math.cos(a) * wheelR * 0.6, GROUND - wheelR - Math.sin(a) * wheelR * 0.6);
-          ctx.lineTo(x + wx + Math.cos(a) * wheelR * 0.6, GROUND - wheelR + Math.sin(a) * wheelR * 0.6);
+          ctx.moveTo(x + wx - Math.cos(a) * wheelR * 0.6, bot - wheelR - Math.sin(a) * wheelR * 0.6);
+          ctx.lineTo(x + wx + Math.cos(a) * wheelR * 0.6, bot - wheelR + Math.sin(a) * wheelR * 0.6);
         }
         ctx.stroke();
       }
     }
-    drawSplats(g.carSplats, x, y);
+    drawSplats(p.splats, x, y);
     if (car.spikes) {
       ctx.fillStyle = '#ccc';
       for (let i = 0; i < 3; i++) {
@@ -980,60 +993,63 @@
     }
   }
 
-  function drawCrates() {
+  function drawCratePart(c, x, y, flash) {
+    const M = CRATES[c.m];
+    block(x, y, BOX_W, BOX_H, flash ? '#fff' : M.fill, M.edge);
+    ctx.strokeStyle = M.edge;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x + 5, y + 5, BOX_W - 10, BOX_H - 10);
+    if (c.m === 0) {
+      ctx.beginPath();
+      ctx.moveTo(x + 6, y + 6);
+      ctx.lineTo(x + BOX_W - 6, y + BOX_H - 6);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = M.edge;
+      for (const [rx, ry] of [[9, 9], [BOX_W - 9, 9], [9, BOX_H - 9], [BOX_W - 9, BOX_H - 9]]) {
+        ctx.beginPath();
+        ctx.arc(x + rx, y + ry, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = M.shine;
+      ctx.fillRect(x + 10, y + 12, 6, BOX_H - 24);
+    }
+    if (c.hp < c.max * 0.6) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + 18, y + 2);
+      ctx.lineTo(x + 26, y + 16);
+      ctx.lineTo(x + 20, y + 26);
+      if (c.hp < c.max * 0.3) {
+        ctx.moveTo(x + BOX_W - 8, y + BOX_H - 2);
+        ctx.lineTo(x + BOX_W - 20, y + 24);
+        ctx.lineTo(x + BOX_W - 14, y + 14);
+      }
+      ctx.stroke();
+    }
+    drawSplats(c.splats, x, y);
+    if (c.blaster !== null) {
+      const B = BLASTERS[c.blaster];
+      const px = x + BOX_W + 4;
+      const py = y + BOX_H / 2;
+      block(x + BOX_W - 8, py - 9, 16, 18, '#374151');
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(c.ang);
+      block(0, -B.thick / 2, B.len, B.thick, '#6b7280');
+      ctx.fillStyle = B.color;
+      ctx.fillRect(B.len - 5, -B.thick / 2 + 1, 5, B.thick - 2);
+      ctx.restore();
+    }
+  }
+
+  function drawStack() {
     const cx = towerCX() - g.camX;
-    g.crates.forEach((c, i) => {
-      const M = CRATES[c.m];
-      const x = cx - BOX_W / 2;
-      const y = crateY(i);
+    g.stack.forEach((p, i) => {
       const flash = i === 0 && g.hurtT > 0;
-      block(x, y, BOX_W, BOX_H, flash ? '#fff' : M.fill, M.edge);
-      ctx.strokeStyle = M.edge;
-      ctx.lineWidth = 3;
-      ctx.strokeRect(x + 5, y + 5, BOX_W - 10, BOX_H - 10);
-      if (c.m === 0) {
-        ctx.beginPath();
-        ctx.moveTo(x + 6, y + 6);
-        ctx.lineTo(x + BOX_W - 6, y + BOX_H - 6);
-        ctx.stroke();
-      } else {
-        ctx.fillStyle = M.edge;
-        for (const [rx, ry] of [[9, 9], [BOX_W - 9, 9], [9, BOX_H - 9], [BOX_W - 9, BOX_H - 9]]) {
-          ctx.beginPath();
-          ctx.arc(x + rx, y + ry, 2.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.fillStyle = M.shine;
-        ctx.fillRect(x + 10, y + 12, 6, BOX_H - 24);
-      }
-      if (c.hp < c.max * 0.6) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x + 18, y + 2);
-        ctx.lineTo(x + 26, y + 16);
-        ctx.lineTo(x + 20, y + 26);
-        if (c.hp < c.max * 0.3) {
-          ctx.moveTo(x + BOX_W - 8, y + BOX_H - 2);
-          ctx.lineTo(x + BOX_W - 20, y + 24);
-          ctx.lineTo(x + BOX_W - 14, y + 14);
-        }
-        ctx.stroke();
-      }
-      drawSplats(c.splats, x, y);
-      if (c.blaster !== null) {
-        const B = BLASTERS[c.blaster];
-        const px = x + BOX_W + 4;
-        const py = y + BOX_H / 2;
-        block(x + BOX_W - 8, py - 9, 16, 18, '#374151');
-        ctx.save();
-        ctx.translate(px, py);
-        ctx.rotate(c.ang);
-        block(0, -B.thick / 2, B.len, B.thick, '#6b7280');
-        ctx.fillStyle = B.color;
-        ctx.fillRect(B.len - 5, -B.thick / 2 + 1, 5, B.thick - 2);
-        ctx.restore();
-      }
+      if (p.type === 'car') drawCarPart(p, cx - CAR_W / 2, partY(i), flash);
+      else drawCratePart(p, cx - BOX_W / 2, partY(i), flash);
     });
   }
 
@@ -1069,7 +1085,7 @@
     const ang = aimAngle();
     const face = Math.cos(ang) >= 0 ? 1 : -1;
     const dead = g.playerHp <= 0;
-    const skin = g.hurtT > 0 && !g.crates.length && !g.hasCar ? '#fff' : '#f1c27d';
+    const skin = g.hurtT > 0 && !g.stack.length ? '#fff' : '#f1c27d';
     ctx.save();
     if (dead) {
       ctx.translate(cx, feet);
@@ -1273,11 +1289,12 @@
     ctx.fillStyle = '#ffd23f';
     ctx.fillText(`🪙 ${fmt(coins)}`, 14, 52);
 
-    const c = g.crates[0];
-    if (c) hudBar(130, 8, 210, `Bottom ${CRATES[c.m].name} (${g.crates.length})`, c.hp, c.max, '#d19a55');
-    else hudBar(130, 8, 210, 'Crates: none left!', 0, 1, '#d19a55');
-    if (g.hasCar) hudBar(130, 34, 210, CARS[build.car].name, g.carHp, g.carMax, '#60a5fa');
-    else hudBar(130, 34, 210, 'Car: wrecked!', 0, 1, '#60a5fa');
+    const b0 = g.stack[0];
+    if (b0) hudBar(130, 8, 210, `Bottom: ${partName(b0)}`, b0.hp, b0.max, b0.type === 'car' ? '#60a5fa' : '#d19a55');
+    else hudBar(130, 8, 210, 'Tower: all smashed!', 0, 1, '#d19a55');
+    const hpLeft = g.stack.reduce((t, p) => t + p.hp, 0);
+    const hpMax = g.stack.reduce((t, p) => t + p.max, 0) || 1;
+    hudBar(130, 34, 210, `Tower (${g.stack.length} parts)`, hpLeft, hpMax, '#60a5fa');
     hudBar(350, 8, 190, 'You', g.playerHp, PLAYER_MAX_HP, '#ff5a5a');
     ctx.fillStyle = '#ddd';
     ctx.font = '13px "Trebuchet MS", sans-serif';
@@ -1298,15 +1315,25 @@
     ctx.save();
     if (g.shake > 0) ctx.translate(rand(-g.shake, g.shake), rand(-g.shake, g.shake));
     drawBackground();
+    // Zoom out when the tower is too tall to fit.
+    const fit = Math.min(1, (GROUND - 72) / (GROUND - towerTopY() + 75));
+    g.zoom = mode === 'build' ? fit : g.zoom + (fit - g.zoom) * 0.1;
+    if (mode === 'build') g.camX = towerCX() - BUILD_SCREEN_X / g.zoom;
+    ctx.save();
+    ctx.translate(0, GROUND);
+    ctx.scale(g.zoom, g.zoom);
+    ctx.translate(0, -GROUND);
+    drawGroundStuff();
     drawPotty();
-    drawCar();
-    drawCrates();
+    drawStack();
     drawPlayer();
     for (const z of g.zombies) drawZombie(z);
     drawShots();
+    drawSelection();
+    ctx.restore();
     ctx.restore();
     if (mode !== 'start') drawHud();
-    if (g.hurtT > 0 && !g.crates.length && !g.hasCar) {
+    if (g.hurtT > 0 && !g.stack.length) {
       ctx.fillStyle = 'rgba(255,0,0,0.15)';
       ctx.fillRect(0, 0, W, H);
     }
@@ -1315,37 +1342,24 @@
   // ---------- Shop ----------
   function shopItems(tab) {
     const items = [];
-    const n = build.crates.length;
+    const crates = build.stack.filter(p => p.type === 'crate');
     if (tab === 'crates') {
       CRATES.forEach((M, m) => {
-        let note = `+${M.hp} health. Stacks your tower higher.`;
-        let can = true;
-        if (!build.car) { note = 'Buy a car first — crates sit on your car.'; can = false; }
-        else if (n >= MAX_CRATES) {
-          const weakest = Math.min(...build.crates.map(c => c.m));
-          if (weakest >= m) { note = 'Tower is full!'; can = false; }
-          else note = `Tower full: swaps out a ${CRATES[weakest].name}.`;
-        }
+        const have = crates.filter(c => c.m === m).length;
         items.push({
-          icon: M.icon, name: M.name, desc: note, cost: M.cost, can,
-          buy() {
-            if (build.crates.length >= MAX_CRATES) {
-              const weakest = Math.min(...build.crates.map(c => c.m));
-              const slot = build.crates.find(c => c.m === weakest);
-              slot.m = m;
-            } else {
-              build.crates.push({ m, blaster: null });
-            }
-          }
+          icon: M.icon, name: M.name,
+          desc: `+${M.hp} health. Goes on top of your tower.` + (have ? ` You have ${have}.` : ''),
+          cost: M.cost, can: true,
+          buy() { build.stack.push({ type: 'crate', m, blaster: null }); }
         });
       });
     } else if (tab === 'blasters') {
       BLASTERS.forEach((B, b) => {
-        const have = build.crates.filter(c => c.blaster === b).length;
-        const free = build.crates.find(c => c.blaster === null);
-        const weaker = build.crates.some(c => c.blaster !== null && c.blaster < b);
+        const have = crates.filter(c => c.blaster === b).length;
+        const free = crates.find(c => c.blaster === null);
+        const weaker = crates.some(c => c.blaster !== null && c.blaster < b);
         let note = `${B.about} ${B.dmg} damage.` + (have ? ` You have ${have}.` : '');
-        if (!build.crates.length) note = 'Buy a crate first — blasters sit on crates.';
+        if (!crates.length) note = 'Buy a crate first. Blasters sit on crates.';
         else if (!free && !weaker) note = 'Every crate already has a blaster this good. Buy more crates!';
         else if (!free) note = `${B.about} Swaps out a weaker blaster.`;
         items.push({
@@ -1354,9 +1368,9 @@
           buy() {
             // Use the strongest empty crate, or swap out the weakest blaster.
             let pick = null;
-            for (const c of build.crates) if (c.blaster === null && (!pick || c.m > pick.m)) pick = c;
+            for (const c of crates) if (c.blaster === null && (!pick || c.m > pick.m)) pick = c;
             if (!pick) {
-              for (const c of build.crates) if (c.blaster < b && (!pick || c.blaster < pick.blaster)) pick = c;
+              for (const c of crates) if (c.blaster < b && (!pick || c.blaster < pick.blaster)) pick = c;
             }
             pick.blaster = b;
           }
@@ -1365,12 +1379,12 @@
     } else if (tab === 'cars') {
       CARS.forEach((car, i) => {
         if (!car) return;
-        const owned = build.car === i;
+        const have = build.stack.filter(p => p.type === 'car' && p.c === i).length;
         items.push({
           icon: car.tank ? '🪖' : car.hover ? '🛸' : '🚗', name: car.name,
-          desc: owned ? '✔ This is your car.' : `${car.hp} health. Tougher for zombies to wreck.`,
-          cost: car.cost, can: !owned,
-          buy() { build.car = i; }
+          desc: `${car.hp} health. Goes at the bottom of your tower.` + (have ? ` You have ${have}.` : ''),
+          cost: car.cost, can: true,
+          buy() { build.stack.unshift({ type: 'car', c: i }); }
         });
       });
     } else {
@@ -1434,19 +1448,295 @@
         if (coins < item.cost || !item.can) return;
         coins -= item.cost;
         item.buy();
-        newLevel();
-        g.zombies = [];
+        selectedKey = null;
+        prepBuildScene();
         renderShop();
       });
       shopEl.appendChild(btn);
     }
+    renderStuff();
+  }
+
+  // ---------- Your Tower list (selling and moving) ----------
+  const sellPrice = cost => Math.floor(cost * 0.4); // you get back less than half
+  const keyIndex = key => parseInt(key.replace(/\D/g, ''), 10);
+  const canDrag = key => key.startsWith('part') || key.startsWith('blaster');
+
+  // Everything on your tower, from the top (you) down to the bottom.
+  function stuffRows() {
+    const rows = [];
+    const gun = GUNS[build.gun];
+    rows.push({
+      key: 'gun', icon: '🧍', name: gun.name, kind: 'Gun in your hands',
+      value: sellPrice(gun.cost), canSell: build.gun > 0,
+      why: "Your starter pistol can't be sold.",
+      sell() { build.gun = 0; }
+    });
+    for (let i = build.stack.length - 1; i >= 0; i--) {
+      const p = build.stack[i];
+      const where = i === 0 ? ' (bottom)' : '';
+      if (p.type === 'car') {
+        const car = CARS[p.c];
+        rows.push({
+          key: 'part' + i, icon: car.tank ? '🪖' : car.hover ? '🛸' : '🚗', name: car.name, kind: 'Car' + where,
+          value: sellPrice(car.cost), canSell: true,
+          sell() { build.stack.splice(i, 1); }
+        });
+        continue;
+      }
+      const B = p.blaster !== null ? BLASTERS[p.blaster] : null;
+      rows.push({
+        key: 'part' + i, icon: CRATES[p.m].icon, name: CRATES[p.m].name,
+        kind: 'Crate' + where + (B ? ' — selling it sells its blaster too' : ''),
+        value: sellPrice(CRATES[p.m].cost) + (B ? sellPrice(B.cost) : 0), canSell: true,
+        sell() { build.stack.splice(i, 1); }
+      });
+      if (B) {
+        rows.push({
+          key: 'blaster' + i, icon: B.icon, name: B.name, kind: 'Blaster on the crate above', indent: true,
+          value: sellPrice(B.cost), canSell: true,
+          sell() { build.stack[i].blaster = null; }
+        });
+      }
+    }
+    return rows;
+  }
+
+  // Double-tap picks a part of your tower; a second quick tap is needed so
+  // nobody sells something by accident.
+  function tapStuff(key) {
+    const now = performance.now();
+    if (lastTap.key === key && now - lastTap.t < 400) {
+      selectedKey = key;
+      lastTap = { key: null, t: 0 };
+      renderStuff();
+    } else {
+      lastTap = { key, t: now };
+    }
+  }
+
+  function afterTowerChange() {
+    selectedKey = null;
+    prepBuildScene();
+    renderShop();
+  }
+
+  function sellSelected() {
+    const row = stuffRows().find(r => r.key === selectedKey);
+    if (!row || !row.canSell) return;
+    coins += row.value;
+    row.sell();
+    afterTowerChange();
+  }
+
+  // Moves a crate or car to another spot in the stack, or a blaster onto another crate.
+  function moveStuff(from, to) {
+    if (!to || to === from || to === 'gun') return;
+    const i = keyIndex(from);
+    const j = keyIndex(to);
+    if (from.startsWith('part')) {
+      const [p] = build.stack.splice(i, 1);
+      build.stack.splice(j, 0, p);
+    } else {
+      const a = build.stack[i];
+      const b = build.stack[j];
+      if (!b || b.type !== 'crate') return; // blasters only go on crates
+      [a.blaster, b.blaster] = [b.blaster, a.blaster];
+    }
+    afterTowerChange();
+  }
+
+  // The next crate above (dir 1) or below (dir -1) crate i, for moving blasters.
+  function nextCrate(i, dir) {
+    for (let k = i + dir; k >= 0 && k < build.stack.length; k += dir) {
+      if (build.stack[k].type === 'crate') return k;
+    }
+    return -1;
+  }
+
+  function actionButton(label, cls, onClick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = cls;
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function renderStuff() {
+    stuffEl.innerHTML = '';
+    for (const row of stuffRows()) {
+      const el = document.createElement('div');
+      el.className = 'stuff-row' + (row.indent ? ' indent' : '') + (row.key === selectedKey ? ' selected' : '');
+      el.dataset.key = row.key;
+      el.tabIndex = 0;
+      el.setAttribute('role', 'button');
+      el.innerHTML = `<span class="shop-icon"></span><span class="shop-text"><span class="shop-name"></span><span class="shop-desc"></span></span>`;
+      el.querySelector('.shop-icon').textContent = row.icon;
+      el.querySelector('.shop-name').textContent = row.name;
+      el.querySelector('.shop-desc').textContent = row.kind;
+      el.addEventListener('click', () => {
+        if (suppressClick) { suppressClick = false; return; }
+        tapStuff(row.key);
+      });
+      el.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { selectedKey = row.key; renderStuff(); }
+      });
+      if (canDrag(row.key)) el.addEventListener('pointerdown', e => startDrag(row.key, e, 'list'));
+      stuffEl.appendChild(el);
+      if (row.key !== selectedKey) continue;
+      const actions = document.createElement('div');
+      actions.className = 'sell-row';
+      if (row.canSell) {
+        actions.appendChild(actionButton(`🗑️ Sell for 🪙 ${fmt(row.value)}`, 'trash-button', sellSelected));
+      } else {
+        const why = document.createElement('span');
+        why.className = 'shop-desc';
+        why.textContent = row.why;
+        actions.appendChild(why);
+      }
+      if (canDrag(row.key)) {
+        const i = keyIndex(row.key);
+        const blaster = row.key.startsWith('blaster');
+        const up = blaster ? nextCrate(i, 1) : (i + 1 < build.stack.length ? i + 1 : -1);
+        const down = blaster ? nextCrate(i, -1) : i - 1;
+        const kind = blaster ? 'blaster' : 'part';
+        if (up >= 0) actions.appendChild(actionButton('▲ Up', 'cancel-button', () => moveStuff(row.key, kind + up)));
+        if (down >= 0) actions.appendChild(actionButton('▼ Down', 'cancel-button', () => moveStuff(row.key, kind + down)));
+      }
+      actions.appendChild(actionButton('Keep it', 'cancel-button', () => { selectedKey = null; renderStuff(); }));
+      stuffEl.appendChild(actions);
+    }
+  }
+
+  // ---------- Hold and drag to move things ----------
+  let drag = null;
+  let suppressClick = false;
+
+  function startDrag(key, e, src) {
+    drag = { key, src, x0: e.clientX, y0: e.clientY, active: false, moved: false, target: null };
+    if (!canDrag(key)) return;
+    drag.timer = setTimeout(() => {
+      if (!drag || drag.moved) return;
+      drag.active = true;
+      selectedKey = null;
+      renderStuff();
+      const row = stuffEl.querySelector(`[data-key="${key}"]`);
+      if (row) row.classList.add('dragging');
+    }, 350);
+  }
+
+  function moveDrag(e) {
+    if (!drag) return;
+    if (!drag.active) {
+      if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > 8) {
+        drag.moved = true;
+        clearTimeout(drag.timer);
+      }
+      return;
+    }
+    if (drag.src === 'canvas') {
+      drag.target = stuffAt(mouse.x, mouse.y);
+    } else {
+      const over = document.elementFromPoint(e.clientX, e.clientY);
+      const row = over && over.closest('.stuff-row');
+      drag.target = row ? row.dataset.key : null;
+      for (const r of stuffEl.querySelectorAll('.stuff-row')) {
+        r.classList.toggle('drop-target', r.dataset.key === drag.target && drag.target !== drag.key);
+      }
+    }
+  }
+
+  function endDrag() {
+    if (!drag) return null;
+    clearTimeout(drag.timer);
+    const done = drag;
+    drag = null;
+    if (done.active) {
+      suppressClick = done.src === 'list';
+      moveStuff(done.key, done.target);
+      renderStuff();
+    }
+    return done;
+  }
+
+  document.addEventListener('pointermove', e => { if (drag && drag.src === 'list') moveDrag(e); });
+  document.addEventListener('pointerup', () => { if (drag && drag.src === 'list') endDrag(); });
+  document.addEventListener('pointercancel', () => { if (drag && drag.src === 'list') { clearTimeout(drag.timer); drag = null; renderStuff(); } });
+  // While dragging a row, stop the page from scrolling under your finger.
+  document.addEventListener('touchmove', e => { if (drag && drag.active) e.preventDefault(); }, { passive: false });
+
+  // Where each part of your tower is (before zoom), for tapping and highlighting.
+  function stuffRect(key) {
+    const cx = towerCX() - g.camX;
+    if (key === 'gun') return { x: cx - 16, y: towerTopY() - 66, w: 62, h: 66 };
+    const i = keyIndex(key);
+    const p = g.stack[i];
+    if (!p) return null;
+    if (key.startsWith('blaster')) {
+      if (p.type !== 'crate' || p.blaster === null) return null;
+      return { x: cx + BOX_W / 2 - 10, y: partY(i) + BOX_H / 2 - 12, w: BLASTERS[p.blaster].len + 18, h: 24 };
+    }
+    return { x: cx - partW(p) / 2, y: partY(i), w: partW(p), h: partH(p) };
+  }
+
+  function stuffAt(mx, my) {
+    const w = toWorld(mx, my);
+    const x = w.x - g.camX;
+    const y = w.y;
+    const keys = [];
+    g.stack.forEach((p, i) => keys.push('blaster' + i));
+    keys.push('gun');
+    g.stack.forEach((p, i) => keys.push('part' + i));
+    return keys.find(k => {
+      const r = stuffRect(k);
+      return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+    }) || null;
+  }
+
+  function outline(key, color) {
+    const r = stuffRect(key);
+    if (!r) return;
+    ctx.strokeStyle = color;
+    ctx.strokeRect(r.x - 3, r.y - 3, r.w + 6, r.h + 6);
+  }
+
+  function drawSelection() {
+    if (mode !== 'build') return;
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 4]);
+    ctx.lineDashOffset = -g.time * 20;
+    if (drag && drag.active) {
+      outline(drag.key, '#fb923c');
+      if (drag.target && drag.target !== drag.key) outline(drag.target, '#8cff5a');
+      // A label that follows your finger while you drag.
+      const row = stuffRows().find(r => r.key === drag.key);
+      const m = toWorld(mouse.x, mouse.y);
+      ctx.setLineDash([]);
+      ctx.font = 'bold 16px "Trebuchet MS", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#000';
+      ctx.fillText(`${row.icon} ${row.name}`, m.x - g.camX + 2, m.y - 14);
+      ctx.fillStyle = '#fde047';
+      ctx.fillText(`${row.icon} ${row.name}`, m.x - g.camX, m.y - 16);
+    } else if (selectedKey) {
+      outline(selectedKey, '#fde047');
+    }
+    ctx.restore();
   }
 
   // ---------- Flow ----------
-  function showBuild() {
-    mode = 'build';
+  function prepBuildScene() {
     newLevel();
     g.zombies = [];
+    g.towerX = BUILD_TOWER_X;
+  }
+
+  function showBuild() {
+    mode = 'build';
+    selectedKey = null;
+    prepBuildScene();
     resultOverlay.classList.add('hidden');
     startOverlay.classList.add('hidden');
     buildOverlay.classList.remove('hidden');
@@ -1512,13 +1802,30 @@
     mouse.x = (e.clientX - r.left) * W / r.width;
     mouse.y = (e.clientY - r.top) * H / r.height;
   }
-  canvas.addEventListener('pointermove', setMouse);
+  canvas.addEventListener('pointermove', e => {
+    setMouse(e);
+    if (drag && drag.src === 'canvas') moveDrag(e);
+  });
   canvas.addEventListener('pointerdown', e => {
     setMouse(e);
+    if (mode === 'build') {
+      const key = stuffAt(mouse.x, mouse.y);
+      if (key) {
+        startDrag(key, e, 'canvas');
+        canvas.setPointerCapture(e.pointerId);
+      }
+      return;
+    }
     mouse.down = true;
     canvas.setPointerCapture(e.pointerId);
   });
-  canvas.addEventListener('pointerup', () => { mouse.down = false; });
+  canvas.addEventListener('pointerup', () => {
+    mouse.down = false;
+    if (drag && drag.src === 'canvas') {
+      const done = endDrag();
+      if (!done.active && !done.moved) tapStuff(done.key);
+    }
+  });
   canvas.addEventListener('pointercancel', () => { mouse.down = false; });
 
   // ---------- Loop ----------

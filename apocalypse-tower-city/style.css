@@ -74,12 +74,25 @@ body {
   padding: 12px;
 }
 
-.overlay.side {
-  left: auto;
-  width: 50%;
+.overlay.build {
   background: none;
+  justify-content: space-between;
   align-items: stretch;
+  gap: 10px;
   padding: 10px;
+  pointer-events: none; /* lets taps reach the tower between the panels */
+}
+
+.overlay.build .panel {
+  pointer-events: auto;
+}
+
+.panel.shop-panel {
+  width: 44%;
+}
+
+.panel.stuff-panel {
+  width: 26%;
 }
 
 .hidden {
@@ -237,8 +250,24 @@ button {
 }
 
 @media (max-width: 720px) {
-  .overlay.side {
+  /* On phones the build screen takes over the whole screen so it isn't squished. */
+  .overlay.build {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    flex-direction: column;
+    justify-content: flex-start;
+    overflow-y: auto;
+    pointer-events: auto;
+    background: var(--night);
+    padding-block: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
+  .panel.shop-panel, .panel.stuff-panel {
     width: 100%;
+    max-height: none;
+    overflow: visible;
   }
   .overlay-card {
     padding: 10px 12px;
@@ -297,4 +326,78 @@ button {
 .shop-tab.has-deal:not(.selected) {
   border-color: var(--toxic);
   box-shadow: 0 0 8px rgba(140, 255, 90, 0.5);
+}
+
+#stuff {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stuff-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: #2b2140;
+  border: 2px solid #4a3d66;
+  border-radius: 10px;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.stuff-row.indent {
+  margin-left: 16px;
+}
+
+.stuff-row.selected {
+  border-color: #fde047;
+  box-shadow: 0 0 8px rgba(253, 224, 71, 0.5);
+}
+
+.stuff-row:focus-visible, .shop-item:focus-visible, .shop-tab:focus-visible {
+  outline: 3px solid #fde047;
+  outline-offset: 1px;
+}
+
+.sell-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.trash-button, .cancel-button {
+  border: 2px solid #000;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-weight: bold;
+  font-size: 0.85rem;
+}
+
+.trash-button {
+  background: var(--danger);
+  color: #fff;
+}
+
+.cancel-button {
+  background: #3a2f52;
+  color: var(--text);
+}
+
+.stuff-row {
+  -webkit-touch-callout: none;
+}
+
+.stuff-row.dragging {
+  border-color: #fb923c;
+  opacity: 0.7;
+}
+
+.stuff-row.drop-target {
+  border-color: var(--toxic);
+  box-shadow: 0 0 8px rgba(140, 255, 90, 0.6);
 }

@@ -44,14 +44,19 @@
     </div>
 
     <!-- Build / shop screen -->
-    <div id="build-overlay" class="overlay side hidden">
-      <div class="panel">
+    <div id="build-overlay" class="overlay build hidden">
+      <div class="panel shop-panel">
         <h2>🔧 Build Your Tower</h2>
         <p id="build-level" class="small"></p>
         <p id="build-coins" class="coins"></p>
         <p id="build-tip" class="tip"></p>
         <div id="shop"></div>
         <button id="go-button" class="primary-button" type="button">Drive Out! 🚗💨</button>
+      </div>
+      <div class="panel stuff-panel">
+        <h2>🧰 Your Tower</h2>
+        <p class="small">Double-tap something here or on your tower to sell it (you get back 40%). Hold it and drag to move it.</p>
+        <div id="stuff"></div>
       </div>
     </div>
 
