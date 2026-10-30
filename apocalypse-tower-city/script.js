@@ -13,8 +13,9 @@
   const BOX_H = 44;
   const MAX_CRATES = 7;
   const PLAYER_MAX_HP = 100;
-  // Prices and coin rewards are both 100x bigger than they started, so it stays fair.
+  // Prices and the level bonus are 100x bigger than they started; zombies pay 50x.
   const COIN_SCALE = 100;
+  const ZOMBIE_COIN_SCALE = 50;
   const fmt = n => Math.round(n).toLocaleString('en-US');
   const TURTLE_SPEED = 30; // the car crawls on its own once a zombie passes the first cone
   const BEST_KEY = 'apocalypseTowerCityBestLevel';
@@ -274,7 +275,7 @@
       hp: T.hp * hpM, maxHp: T.hp * hpM,
       speed: T.speed * spM * rand(0.85, 1.15),
       dps: T.dps * dM,
-      coins: Math.round(T.coins * (1 + 0.2 * (L - 1))) * COIN_SCALE,
+      coins: Math.round(T.coins * (1 + 0.2 * (L - 1))) * ZOMBIE_COIN_SCALE,
       state: 'walk',
       hitT: 0,
       phase: Math.random() * 6,
