@@ -406,3 +406,22 @@ button {
   margin-left: auto;
   white-space: nowrap;
 }
+
+#pause-button {
+  position: absolute;
+  top: 1.2%;
+  right: 1%;
+  width: 5%;
+  min-width: 30px;
+  aspect-ratio: 1;
+  font-size: clamp(0.8rem, 2vw, 1.3rem);
+  font-weight: bold;
+  letter-spacing: -0.1em;
+  border: 2px solid #000;
+  border-radius: 8px;
+  background: var(--toxic);
+  color: #10200a;
+  padding: 0;
+  line-height: 1;
+  z-index: 5;
+}

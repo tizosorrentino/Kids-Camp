@@ -105,6 +105,10 @@
   const nextButton = document.getElementById('next-button');
   const restartButton = document.getElementById('restart-button');
   const bestLine = document.getElementById('best-line');
+  const pauseButton = document.getElementById('pause-button');
+  const goButton = document.getElementById('go-button');
+  const startButton = document.getElementById('start-button');
+  const continueButton = document.getElementById('continue-button');
 
   // ---------- Helpers ----------
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -151,6 +155,7 @@
   let build = null;
   let g = null;
   let shopTab = 'crates';
+  let savedGame = null; // the level you paused to change your stuff
   let selectedKey = null; // the part of your tower picked for selling
   let lastTap = { key: null, t: 0 };
   const BUILD_TOWER_X = 470;
@@ -1300,10 +1305,10 @@
     ctx.font = '13px "Trebuchet MS", sans-serif';
     ctx.fillText(`🔫 ${GUNS[build.gun].name}`, 352, 50);
 
-    hudBar(W - 250, 8, 236, '🚽 Porta Potty', g.sourceHp, g.sourceMax, '#8cff5a');
+    hudBar(W - 300, 8, 236, '🚽 Porta Potty', g.sourceHp, g.sourceMax, '#8cff5a');
     const start = 120;
     const prog = clamp((g.towerX - start) / (g.sourceX - 230 - CAR_W - start), 0, 1);
-    const tx = W - 250;
+    const tx = W - 300;
     ctx.fillStyle = 'rgba(255,255,255,0.25)';
     ctx.fillRect(tx, 42, 236, 4);
     ctx.font = '14px sans-serif';
@@ -1408,7 +1413,9 @@
   }
 
   function renderShop() {
-    buildLevelEl.textContent = `Next up: Level ${level}  •  Porta potty health: ${pottyHp(level)}`;
+    buildLevelEl.textContent = savedGame
+      ? `Paused in the middle of level ${level}. Your tower keeps its damage.`
+      : `Next up: Level ${level}  •  Porta potty health: ${pottyHp(level)}`;
     buildCoinsEl.textContent = `🪙 ${fmt(coins)} coins`;
     buildTipEl.textContent = NEW_ZOMBIE_TIPS[level] ||
       (level % 3 === 0 ? 'A BOSS zombie comes out this level!' : 'The zombies are tougher and hit harder now!');
@@ -1764,6 +1771,8 @@
     newLevel();
     g.zombies = [];
     g.towerX = BUILD_TOWER_X;
+    // Mid-level, show the damage your tower already took.
+    if (savedGame) g.stack.forEach((q, i) => { if (build.stack[i].hp !== undefined) q.hp = build.stack[i].hp; });
   }
 
   function showBuild() {
@@ -1786,14 +1795,26 @@
 
   function driveOut() {
     buildOverlay.classList.add('hidden');
-    newLevel();
+    if (savedGame) {
+      // Back to the same spot in the level, with your new stuff on the tower.
+      g = savedGame;
+      savedGame = null;
+      g.stack = build.stack.map(p => p.hp !== undefined ? p
+        : { ...p, hp: partHp(p), max: partHp(p), ang: Math.PI, t: 0, splats: [] });
+      g.drop = 0;
+      goButton.textContent = 'Drive Out! 🚗💨';
+    } else {
+      newLevel();
+    }
     mode = 'play';
     mouse.down = false;
+    keys.fire = false;
   }
 
   function setPaused(p) {
     if (p && mode === 'play') {
       mode = 'paused';
+      mouse.down = false;
       pauseOverlay.classList.remove('hidden');
     } else if (!p && mode === 'paused') {
       mode = 'play';
@@ -1801,9 +1822,40 @@
     }
   }
 
-  document.getElementById('start-button').addEventListener('click', startRun);
-  document.getElementById('go-button').addEventListener('click', driveOut);
+  // Pause, then shop for new stuff without restarting the level.
+  function shopMidLevel() {
+    savedGame = g;
+    build.stack = g.stack; // only what's still standing
+    pauseOverlay.classList.add('hidden');
+    goButton.textContent = 'Back to the Fight! ⚔️';
+    mode = 'build';
+    selectedKey = null;
+    prepBuildScene();
+    buildOverlay.classList.remove('hidden');
+    renderShop();
+  }
+
+  function goHome() {
+    savedGame = null;
+    goButton.textContent = 'Drive Out! 🚗💨';
+    mode = 'start';
+    for (const o of [pauseOverlay, buildOverlay, resultOverlay]) o.classList.add('hidden');
+    prepBuildScene();
+    // Your coins and stuff stay; Keep Playing picks up at the level you were on.
+    continueButton.classList.remove('hidden');
+    continueButton.textContent = `Keep Playing (Level ${level})`;
+    startButton.textContent = 'New Game';
+    bestLine.textContent = best ? `Your best: cleared level ${best}` : '';
+    startOverlay.classList.remove('hidden');
+  }
+
+  startButton.addEventListener('click', startRun);
+  continueButton.addEventListener('click', showBuild);
+  goButton.addEventListener('click', driveOut);
   document.getElementById('resume-button').addEventListener('click', () => setPaused(false));
+  document.getElementById('pause-shop-button').addEventListener('click', shopMidLevel);
+  document.getElementById('home-button').addEventListener('click', goHome);
+  pauseButton.addEventListener('click', () => setPaused(true));
   nextButton.addEventListener('click', () => { level++; showBuild(); });
   // Dying sends you back to level 1, but you keep everything you bought.
   restartButton.addEventListener('click', () => { level = 1; showBuild(); });
@@ -1874,6 +1926,7 @@
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
+    pauseButton.hidden = mode !== 'play';
     if (mode === 'play' || mode === 'ending' || mode === 'lost') update(dt);
     else if (mode === 'build' || mode === 'start') g.time += dt;
     render();
